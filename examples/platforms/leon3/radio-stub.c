@@ -58,18 +58,13 @@ static ThreadError sReceiveError;
 static uint8_t sTransmitPsdu[IEEE802154_MAX_LENGTH];
 static uint8_t sReceivePsdu[IEEE802154_MAX_LENGTH];
 
-typedef enum ePhyState
-{
-    kStateDisabled = 0,
-    kStateSleep,
-    kStateIdle,
-    kStateListen,
-    kStateReceive,
-    kStateTransmit,
-} PhyState;
-
-static PhyState sState;
+static PhyState sState = kStateDisabled;
 static bool sIsReceiverEnabled = false;
+
+// Stub variables
+static uint16_t panId;
+static uint8_t extAddr[8];
+static uint16_t shortAddr;
 
 void enableReceiver(void)
 {
@@ -88,17 +83,47 @@ void setChannel(uint8_t channel)
 
 ThreadError otPlatRadioSetPanId(uint16_t panid)
 {
-    return kThreadError_None;
+    ThreadError error = kThreadError_Busy;
+
+    if (sState != kStateTransmit)
+    {
+        panId = panid;
+        error = kThreadError_None;
+    }
+
+    return error;
 }
 
 ThreadError otPlatRadioSetExtendedAddress(uint8_t *address)
 {
-    return kThreadError_None;
+    ThreadError error = kThreadError_Busy;
+
+    if (sState != kStateTransmit)
+    {
+        int i;
+
+        for (i = 0; i < 8; i++)
+        {
+            extAddr[i] = address[i];
+        }
+
+        error = kThreadError_None;
+    }
+
+    return error;
 }
 
 ThreadError otPlatRadioSetShortAddress(uint16_t address)
 {
-    return kThreadError_None;
+    ThreadError error = kThreadError_Busy;
+
+    if (sState != kStateTransmit)
+    {
+        shortAddr = address;
+        error = kThreadError_None;
+    }
+
+    return error;
 }
 
 void leon3RadioInit(void)
@@ -111,78 +136,59 @@ void leon3RadioInit(void)
 
 ThreadError otPlatRadioEnable(void)
 {
-    ThreadError error = kThreadError_None;
+    ThreadError error = kThreadError_Busy;
 
-    VerifyOrExit(sState == kStateDisabled, error = kThreadError_Busy);
-    sState = kStateSleep;
+    if (sState == kStateSleep || sState == kStateDisabled)
+    {
+        error = kThreadError_None;
+        sState = kStateSleep;
+    }
 
-exit:
     return error;
 }
 
 ThreadError otPlatRadioDisable(void)
 {
-    ThreadError error = kThreadError_None;
+    ThreadError error = kThreadError_Busy;
 
-    VerifyOrExit(sState == kStateIdle, error = kThreadError_Busy);
-    sState = kStateDisabled;
+    if (sState == kStateDisabled || sState == kStateSleep)
+    {
+        error = kThreadError_None;
+        sState = kStateDisabled;
+    }
 
-exit:
     return error;
 }
 
 ThreadError otPlatRadioSleep(void)
 {
-    ThreadError error = kThreadError_None;
+    ThreadError error = kThreadError_Busy;
 
-    VerifyOrExit(error == kStateIdle, error = kThreadError_Busy);
-    sState = kStateSleep;
-
-exit:
-    return error;
-}
-
-ThreadError otPlatRadioIdle(void)
-{
-    ThreadError error = kThreadError_None;
-
-    switch (sState)
+    if (sState == kStateSleep || sState == kStateReceive)
     {
-    case kStateSleep:
-        sState = kStateIdle;
-        break;
-
-    case kStateIdle:
-        break;
-
-    case kStateListen:
-    case kStateTransmit:
+        error = kThreadError_None;
+        sState = kStateSleep;
         disableReceiver();
-        sState = kStateIdle;
-        break;
-
-    case kStateReceive:
-    case kStateDisabled:
-        ExitNow(error = kThreadError_Busy);
-        break;
     }
 
-exit:
+    sState = kStateSleep;
+
     return error;
 }
 
 ThreadError otPlatRadioReceive(uint8_t aChannel)
 {
-    ThreadError error = kThreadError_None;
+    ThreadError error = kThreadError_Busy;
 
-    VerifyOrExit(sState == kStateIdle, error = kThreadError_Busy);
-    sState = kStateListen;
+    if (sState != kStateDisabled)
+    {
+        error = kThreadError_None;
+        sState = kStateReceive;
+        setChannel(aChannel);
+        sReceiveFrame.mChannel = aChannel;
+        enableReceiver();
+    }
 
-    setChannel(aChannel);
-    sReceiveFrame.mChannel = aChannel;
-    enableReceiver();
-
-exit:
     return error;
 }
 
@@ -193,24 +199,50 @@ RadioPacket *otPlatRadioGetTransmitBuffer(void)
 
 ThreadError otPlatRadioTransmit(void)
 {
-    ThreadError error = kThreadError_None;
-    int i;
+    ThreadError error = kThreadError_Busy;
 
-    VerifyOrExit(sState == kStateIdle, error = kThreadError_Busy);
-    sState = kStateTransmit;
-    sTransmitError = kThreadError_None;
-
-    setChannel(sTransmitFrame.mChannel);
-    enableReceiver();
-
-exit:
-
-    if (sTransmitError != kThreadError_None || (sTransmitFrame.mPsdu[0] & IEEE802154_ACK_REQUEST) == 0)
+    if (sState == kStateReceive)
     {
-        disableReceiver();
+        int i;
+
+        error = kThreadError_None;
+        sState = kStateTransmit;
+        sTransmitError = kThreadError_None;
+
+        //while (HWREG(RFCORE_XREG_FSMSTAT1) & RFCORE_XREG_FSMSTAT1_TX_ACTIVE);
+
+        // flush txfifo
+
+        // set frame length
+
+        // set frame data
+        /*
+        for (i = 0; i < sTransmitFrame.mLength; i++)
+        {
+            ... = sTransmitFrame.mPsdu[i];
+        }
+        */
+
+        setChannel(sTransmitFrame.mChannel);
+        //while ((HWREG(RFCORE_XREG_FSMSTAT1) & 1) == 0);
+
+        // wait for valid rssi
+
+        //VerifyOrExit(HWREG(RFCORE_XREG_FSMSTAT1) & (RFCORE_XREG_FSMSTAT1_CCA | RFCORE_XREG_FSMSTAT1_SFD),
+                     //sTransmitError = kThreadError_ChannelAccessFailure);
+
+        // begin transmit
+
+        //while (HWREG(RFCORE_XREG_FSMSTAT1) & RFCORE_XREG_FSMSTAT1_TX_ACTIVE);
+
     }
 
     return error;
+}
+
+RadioPacket *otPlatRadioGetTransmitBuffer(void)
+{
+    return &sTransmitFrame;
 }
 
 int8_t otPlatRadioGetNoiseFloor(void)
@@ -238,7 +270,7 @@ void readFrame(void)
     uint8_t crcCorr;
     int i;
 
-    VerifyOrExit(sState == kStateListen || sState == kStateTransmit, ;);
+    VerifyOrExit(sState == kStateReceive || sState == kStateTransmit, ;);
 
     // read length
     VerifyOrExit(IEEE802154_MIN_LENGTH <= length && length <= IEEE802154_MAX_LENGTH, ;);
@@ -251,50 +283,28 @@ void leon3RadioProcess(void)
 {
     readFrame();
 
-    switch (sState)
+    if ((sState == kStateReceive) && (sReceiveFrame.mLength > 0))
     {
-    case kStateDisabled:
-        break;
+        otPlatRadioReceiveDone(&sReceiveFrame, sReceiveError);
+    }
 
-    case kStateSleep:
-        break;
-
-    case kStateIdle:
-        break;
-
-    case kStateListen:
-    case kStateReceive:
-        if (sReceiveFrame.mLength > 0)
-        {
-            sState = kStateIdle;
-            otPlatRadioReceiveDone(&sReceiveFrame, sReceiveError);
-        }
-
-        break;
-
-    case kStateTransmit:
+    if (sState == kStateTransmit)
+    {
         if (sTransmitError != kThreadError_None || (sTransmitFrame.mPsdu[0] & IEEE802154_ACK_REQUEST) == 0)
         {
-            sState = kStateIdle;
+            sState = kStateReceive;
             otPlatRadioTransmitDone(false, sTransmitError);
         }
         else if (sReceiveFrame.mLength == IEEE802154_ACK_LENGTH &&
                  (sReceiveFrame.mPsdu[0] & IEEE802154_FRAME_TYPE_MASK) == IEEE802154_FRAME_TYPE_ACK &&
                  (sReceiveFrame.mPsdu[IEEE802154_DSN_OFFSET] == sTransmitFrame.mPsdu[IEEE802154_DSN_OFFSET]))
         {
-            sState = kStateIdle;
+            sState = kStateReceive;
             otPlatRadioTransmitDone((sReceiveFrame.mPsdu[0] & IEEE802154_FRAME_PENDING) != 0, sTransmitError);
         }
-
-        break;
     }
 
     sReceiveFrame.mLength = 0;
-
-    if (sState == kStateIdle)
-    {
-        disableReceiver();
-    }
 }
 
 void RFCoreRxTxIntHandler(void)
