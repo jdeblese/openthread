@@ -37,6 +37,7 @@ libopenthread_leon3_a_CPPFLAGS            = \
 
 libopenthread_leon3_a_SOURCES             = \
     alarm.c                                 \
+    misc.c                                  \
     logging.c                               \
     platform.c                              \
     radio-stub.c                            \
