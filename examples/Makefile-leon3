@@ -50,6 +50,8 @@ COMMONCFLAGS                    = \
     -g                            \
     -msoft-float                  \
     -Wall                         \
+    -Wextra                       \
+    -Werror                       \
     $(NULL)
 
 CPPFLAGS                        = \

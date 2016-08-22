@@ -189,4 +189,6 @@ void UARTIntHandler(int irq)
            sReceiveLength++;
        }
     }
+
+    (void)irq;
 }

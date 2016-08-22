@@ -35,7 +35,7 @@
 #include <platform/uart.h>
 #include "platform-leon3.h"
 
-volatile static uint32_t *lreg;
+static volatile uint32_t *lreg;
 
 void PlatformInit(int argc, char *argv[])
 {
@@ -51,6 +51,9 @@ void PlatformInit(int argc, char *argv[])
     otPlatUartEnable();
 
     otPlatUartSend(msg, 14);
+
+    (void)argc;
+    (void)argv;
 }
 
 void PlatformProcessDrivers(void)

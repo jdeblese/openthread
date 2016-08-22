@@ -61,11 +61,6 @@ static uint8_t sReceivePsdu[IEEE802154_MAX_LENGTH];
 static PhyState sState = kStateDisabled;
 static bool sIsReceiverEnabled = false;
 
-// Stub variables
-static uint16_t panId;
-static uint8_t extAddr[8];
-static uint16_t shortAddr;
-
 void enableReceiver(void)
 {
     sIsReceiverEnabled = true;
@@ -78,7 +73,7 @@ void disableReceiver(void)
 
 void setChannel(uint8_t channel)
 {
-
+    (void)channel;
 }
 
 ThreadError otPlatRadioSetPanId(uint16_t panid)
@@ -87,7 +82,7 @@ ThreadError otPlatRadioSetPanId(uint16_t panid)
 
     if (sState != kStateTransmit)
     {
-        panId = panid;
+        (void)panid;
         error = kThreadError_None;
     }
 
@@ -104,7 +99,7 @@ ThreadError otPlatRadioSetExtendedAddress(uint8_t *address)
 
         for (i = 0; i < 8; i++)
         {
-            extAddr[i] = address[i];
+            (void)address[i];
         }
 
         error = kThreadError_None;
@@ -119,7 +114,7 @@ ThreadError otPlatRadioSetShortAddress(uint16_t address)
 
     if (sState != kStateTransmit)
     {
-        shortAddr = address;
+        (void)address;
         error = kThreadError_None;
     }
 
@@ -203,7 +198,7 @@ ThreadError otPlatRadioTransmit(void)
 
     if (sState == kStateReceive)
     {
-        int i;
+        //int i;
 
         error = kThreadError_None;
         sState = kStateTransmit;
@@ -240,11 +235,6 @@ ThreadError otPlatRadioTransmit(void)
     return error;
 }
 
-RadioPacket *otPlatRadioGetTransmitBuffer(void)
-{
-    return &sTransmitFrame;
-}
-
 int8_t otPlatRadioGetNoiseFloor(void)
 {
     return 0;
@@ -262,13 +252,14 @@ bool otPlatRadioGetPromiscuous(void)
 
 void otPlatRadioSetPromiscuous(bool aEnable)
 {
+    (void)aEnable;
 }
 
 void readFrame(void)
 {
-    uint8_t length;
-    uint8_t crcCorr;
-    int i;
+    uint8_t length = 0;
+    //uint8_t crcCorr;
+    //int i;
 
     VerifyOrExit(sState == kStateReceive || sState == kStateTransmit, ;);
 
