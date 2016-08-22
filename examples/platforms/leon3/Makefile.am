@@ -28,38 +28,28 @@
 
 include $(abs_top_nlbuild_autotools_dir)/automake/pre.am
 
-# Always package (e.g. for 'make dist') these subdirectories.
+lib_LIBRARIES                             = libopenthread-leon3.a
 
-DIST_SUBDIRS                            = \
-    cc2538                                \
-    posix                                 \
-    leon3                                 \
+libopenthread_leon3_a_CPPFLAGS            = \
+    -I$(top_srcdir)/include                 \
+    -I$(top_srcdir)/src/core                \
     $(NULL)
 
-# Always build (e.g. for 'make all') these subdirectories.
-
-if OPENTHREAD_EXAMPLES_POSIX
-SUBDIRS                                 = posix
-endif
-
-if OPENTHREAD_EXAMPLES_CC2538
-SUBDIRS                                 = cc2538
-endif
-
-if OPENTHREAD_EXAMPLES_LEON3
-SUBDIRS                                 = leon3
-endif
-
-noinst_HEADERS                          = \
-    platform.h                            \
+libopenthread_leon3_a_SOURCES             = \
+    alarm.c                                 \
+    logging.c                               \
+    platform.c                              \
+    radio-stub.c                            \
+    random.c                                \
+    uart.c                                  \
     $(NULL)
 
-# Always pretty (e.g. for 'make pretty') these subdirectories.
-
-PRETTY_SUBDIRS                          = \
-    cc2538                                \
-    posix                                 \
-    leon3                                 \
+noinst_HEADERS                            = \
+    platform-leon3.h                        \
     $(NULL)
+
+if OPENTHREAD_BUILD_COVERAGE
+CLEANFILES                                = $(wildcard *.gcda *.gcno)
+endif # OPENTHREAD_BUILD_COVERAGE
 
 include $(abs_top_nlbuild_autotools_dir)/automake/post.am

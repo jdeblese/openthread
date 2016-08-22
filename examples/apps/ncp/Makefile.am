@@ -63,6 +63,13 @@ ot_ncp_LDFLAGS                                                        += \
     $(NULL)
 endif
 
+if OPENTHREAD_EXAMPLES_LEON3
+ot_ncp_LDADD                                                          += \
+    $(top_builddir)/examples/platforms/leon3/libopenthread-leon3.a       \
+    -lstdc++                                                             \
+    $(NULL)
+endif
+
 ot_ncp_SOURCES                                                         = \
     main.c                                                               \
     $(NULL)

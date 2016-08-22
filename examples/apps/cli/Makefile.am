@@ -63,6 +63,13 @@ ot_cli_LDFLAGS                                                        += \
     $(NULL)
 endif
 
+if OPENTHREAD_EXAMPLES_LEON3
+ot_cli_LDADD                                                          += \
+    $(top_builddir)/examples/platforms/leon3/libopenthread-leon3.a       \
+    -lstdc++                                                             \
+    $(NULL)
+endif
+
 ot_cli_SOURCES                                                         = \
     main.c                                                               \
     $(NULL)
