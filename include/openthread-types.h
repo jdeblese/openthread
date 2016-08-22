@@ -125,12 +125,51 @@ typedef enum ThreadError
     kThreadError_Error = 255,
 } ThreadError;
 
+#define OT_IP6_IID_SIZE            8   ///< Size of an IPv6 Interface Identifier (bytes)
 
-#define OT_EXT_ADDRESS_SIZE   8   ///< Size of an IEEE 802.15.4 Extended Address (bytes)
-#define OT_EXT_PAN_ID_SIZE    8   ///< Size of a Thread PAN ID (bytes)
-#define OT_NETWORK_NAME_SIZE  16  ///< Size of the Thread Network Name field (bytes)
-#define OT_IP6_ADDRESS_SIZE   16  ///< Size of an IPv6 address (bytes)
-#define OT_IP6_IID_SIZE       8   ///< Size of an IPv6 Interface Identifier (bytes)
+#define OT_MASTER_KEY_SIZE         16  ///< Size of the Thread Master Key (bytes)
+
+/**
+ * This structure represents a Thread Master Key.
+ *
+ */
+typedef struct otMasterKey
+{
+    uint8_t m8[OT_MASTER_KEY_SIZE];
+} otMasterKey;
+
+#define OT_NETWORK_NAME_SIZE       16  ///< Size of the Thread Network Name field (bytes)
+
+/**
+ * This structure represents a Network Name.
+ *
+ */
+typedef struct otNetworkName
+{
+    char m8[OT_NETWORK_NAME_SIZE];
+} otNetworkName;
+
+#define OT_EXT_PAN_ID_SIZE         8   ///< Size of a Thread PAN ID (bytes)
+
+/**
+ * This structure represents an Extended PAN ID.
+ *
+ */
+typedef struct otExtendedPanId
+{
+    uint8_t m8[OT_EXT_PAN_ID_SIZE];
+} otExtendedPanId;
+
+#define OT_MESH_LOCAL_PREFIX_SIZE  8  ///< Size of the Mesh Local Prefix (bytes)
+
+/**
+ * This structure represents a Mesh Local Prefix.
+ *
+ */
+typedef struct otMeshLocalPrefix
+{
+    uint8_t m8[OT_MESH_LOCAL_PREFIX_SIZE];
+} otMeshLocalPrefix;
 
 /**
  * This type represents the IEEE 802.15.4 PAN ID.
@@ -144,6 +183,8 @@ typedef uint16_t otPanId;
  */
 typedef uint16_t otShortAddress;
 
+#define OT_EXT_ADDRESS_SIZE        8   ///< Size of an IEEE 802.15.4 Extended Address (bytes)
+
 /**
  * This type represents the IEEE 802.15.4 Extended Address.
  *
@@ -153,12 +194,29 @@ typedef struct otExtAddress
     uint8_t m8[OT_EXT_ADDRESS_SIZE];  ///< IEEE 802.15.4 Extended Address bytes
 } otExtAddress;
 
+#define OT_IP6_ADDRESS_SIZE        16  ///< Size of an IPv6 address (bytes)
+
+/**
+ * This structure represents an IPv6 address.
+ */
+typedef OT_TOOL_PACKED_BEGIN struct otIp6Address
+{
+    union
+    {
+        uint8_t  m8[OT_IP6_ADDRESS_SIZE];                      ///< 8-bit fields
+        uint16_t m16[OT_IP6_ADDRESS_SIZE / sizeof(uint16_t)];  ///< 16-bit fields
+        uint32_t m32[OT_IP6_ADDRESS_SIZE / sizeof(uint32_t)];  ///< 32-bit fields
+    } mFields;                                                 ///< IPv6 accessor fields
+} OT_TOOL_PACKED_END otIp6Address;
+
 /**
  * @addtogroup commands  Commands
  *
  * @{
  *
  */
+
+#define OT_PANID_BROADCAST   0xffff      ///< IEEE 802.15.4 Broadcast PAN ID
 
 #define OT_CHANNEL_11_MASK   (1 << 11)   ///< Channel 11
 #define OT_CHANNEL_12_MASK   (1 << 12)   ///< Channel 12
@@ -223,6 +281,33 @@ typedef struct otActiveScanResult
  */
 
 /**
+ * This structure represents an Active or Pending Operational Dataset.
+ *
+ */
+typedef struct otOperationalDataset
+{
+    uint64_t          mActiveTimestamp;            ///< Active Timestamp
+    uint64_t          mPendingTimestamp;           ///< Pending Timestamp
+    otMasterKey       mMasterKey;                  ///< Network Master Key
+    otNetworkName     mNetworkName;                ///< Network Name
+    otExtendedPanId   mExtendedPanId;              ///< Extended PAN ID
+    otMeshLocalPrefix mMeshLocalPrefix;            ///< Mesh Local Prefix
+    uint32_t          mDelay;                      ///< Delay Timer
+    otPanId           mPanId;                      ///< PAN ID
+    uint8_t           mChannel;                    ///< Channel
+
+    bool              mIsActiveTimestampSet : 1;   ///< TRUE if Active Timestamp is set, FALSE otherwise.
+    bool              mIsPendingTimestampSet : 1;  ///< TRUE if Pending Timestamp is set, FALSE otherwise.
+    bool              mIsMasterKeySet : 1;         ///< TRUE if Network Master Key is set, FALSE otherwise.
+    bool              mIsNetworkNameSet : 1;       ///< TRUE if Network Name is set, FALSE otherwise.
+    bool              mIsExtendedPanIdSet : 1;     ///< TRUE if Extended PAN ID is set, FALSE otherwise.
+    bool              mIsMeshLocalPrefixSet : 1;   ///< TRUE if Mesh Local Prefix is set, FALSE otherwise.
+    bool              mIsDelaySet : 1;             ///< TRUE if Delay Timer is set, FALSE otherwise.
+    bool              mIsPanIdSet : 1;             ///< TRUE if PAN ID is set, FALSE otherwise.
+    bool              mIsChannelSet : 1;           ///< TRUE if Channel is set, FALSE otherwise.
+} otOperationalDataset;
+
+/**
  * This structure represents an MLE Link Mode configuration.
  */
 typedef struct otLinkModeConfig
@@ -265,7 +350,8 @@ enum
     OT_THREAD_CHILD_ADDED   = 1 << 6,  ///< Child was added
     OT_THREAD_CHILD_REMOVED = 1 << 7,  ///< Child was removed
 
-    OT_IP6_ML_ADDR_CHANGED  = 1 << 8,  ///< The mesh-local address has changed
+    OT_IP6_LL_ADDR_CHANGED  = 1 << 8,  ///< The link-local address has changed
+    OT_IP6_ML_ADDR_CHANGED  = 1 << 9,  ///< The mesh-local address has changed
 };
 
 /**
@@ -283,19 +369,6 @@ enum
  */
 
 /**
- * This structure represents an IPv6 address.
- */
-typedef OT_TOOL_PACKED_BEGIN struct otIp6Address
-{
-    union
-    {
-        uint8_t  m8[OT_IP6_ADDRESS_SIZE];                      ///< 8-bit fields
-        uint16_t m16[OT_IP6_ADDRESS_SIZE / sizeof(uint16_t)];  ///< 16-bit fields
-        uint32_t m32[OT_IP6_ADDRESS_SIZE / sizeof(uint32_t)];  ///< 32-bit fields
-    } mFields;                                                 ///< IPv6 accessor fields
-} OT_TOOL_PACKED_END otIp6Address;
-
-/**
  * This structure represents an IPv6 prefix.
  */
 typedef struct otIp6Prefix
@@ -310,7 +383,7 @@ typedef struct otIp6Prefix
 typedef struct otBorderRouterConfig
 {
     /**
-     * TRUE, if this border router is a DHCPv6 Agent that supplies other configuration data.  FALSE, otherwise.
+     * The IPv6 prefix.
      */
     otIp6Prefix mPrefix;
 
@@ -320,14 +393,14 @@ typedef struct otBorderRouterConfig
     int mPreference : 2;
 
     /**
-     * TRUE, if @p mPrefix is preferred and should e used for address autoconfiguration.  FALSE, otherwise.
+     * TRUE, if @p mPrefix is preferred.  FALSE, otherwise.
      */
-    bool mSlaacPreferred : 1;
+    bool mPreferred : 1;
 
     /**
-     * TRUE, if @p mPrefix is valid and should be used for address autoconfiguration.  FALSE, otherwise.
+     * TRUE, if @p mPrefix should be used for address autoconfiguration.  FALSE, otherwise.
      */
-    bool mSlaacValid : 1;
+    bool mSlaac : 1;
 
     /**
      * TRUE, if this border router is a DHCPv6 Agent that supplies IPv6 address configuration.  FALSE, otherwise.
@@ -343,6 +416,11 @@ typedef struct otBorderRouterConfig
      * TRUE, if this border router is a default route for @p mPrefix.  FALSE, otherwise.
      */
     bool mDefaultRoute : 1;
+
+    /**
+     * TRUE, if this prefix is considered on-mesh.  FALSE, otherwise.
+     */
+    bool mOnMesh : 1;
 
     /**
      * TRUE, if this configuration is considered Stable Network Data.  FALSE, otherwise.

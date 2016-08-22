@@ -59,11 +59,14 @@
 /* ------------------------------------------------------------------------- */
 /* MARK: Macros and Constants */
 
-#define SPI_HDLC_VERSION                "0.01"
+#define SPI_HDLC_VERSION                "0.03"
 
 #define MAX_FRAME_SIZE                  2048
 #define HEADER_LEN                      5
-#define SPI_HEADER_RESET_FLAG			(1 << 7)
+#define SPI_HEADER_RESET_FLAG           0x80
+#define SPI_HEADER_CRC_FLAG             0x40
+#define SPI_HEADER_PATTERN_VALUE        0x02
+#define SPI_HEADER_PATTERN_MASK         0x03
 
 #define EXIT_QUIT                       65535
 
@@ -85,81 +88,119 @@
 
 #define SPI_POLL_PERIOD_MSEC            (MSEC_PER_SEC/30)
 
-static const uint8_t kHDLCResetSignal[] = { 0x7E, 0x13, 0x11, 0x7E };
-static const uint16_t kHDLCCRCCheckValue = 0x2189;
+#define GPIO_INT_ASSERT_STATE           0 // I̅N̅T̅ is asserted low
+#define GPIO_RES_ASSERT_STATE           0 // R̅E̅S̅ is asserted low
+
+#define SPI_RX_ALIGN_ALLOWANCE_MAX      3
+
+#define SOCKET_DEBUG_BYTES_PER_LINE     16
+
+static const uint8_t kHdlcResetSignal[] = { 0x7E, 0x13, 0x11, 0x7E };
+static const uint16_t kHdlcCrcCheckValue = 0xf0b8;
+static const uint16_t kHdlcCrcResetValue = 0xffff;
 
 enum {
     MODE_STDIO = 0,
     MODE_PTY = 1,
 };
 
+// Ignores return value from function 's'
+#define IGNORE_RETURN_VALUE(s)  do { if (s){} } while (0)
+
 /* ------------------------------------------------------------------------- */
 /* MARK: Global State */
 
-static int gMode = MODE_PTY;
-static const char* gSpiDevPath = NULL;
-static const char* gIntGpioDevPath = NULL;
-static const char* gResGpioDevPath = NULL;
-static int gVerbose = LOG_WARNING;
+#if HAVE_OPENPTY
+static int sMode = MODE_PTY;
+#else
+static int sMode = MODE_STDIO;
+#endif
 
-static int gSpiDevFd = -1;
-static int gResGpioValueFd = -1;
-static int gIntGpioValueFd = -1;
+static const char* sSpiDevPath     = NULL;
+static const char* sIntGpioDevPath = NULL;
+static const char* sResGpioDevPath = NULL;
 
-static int gHDLCInputFd = -1;
-static int gHDLCOutputFd = -1;
+static int sVerbose             = LOG_NOTICE;
 
-static int gSpiSpeed = 1000000;
-static uint8_t gSpiMode = 0;
-static int gSpiBeginDelay = 0;
+static int sSpiDevFd            = -1;
+static int sResGpioValueFd      = -1;
+static int sIntGpioValueFd      = -1;
 
-static uint16_t gSpiRxPayloadSize;
-static uint8_t gSpiRxFrameBuffer[MAX_FRAME_SIZE];
+static int sHdlcInputFd         = -1;
+static int sHdlcOutputFd        = -1;
 
-static uint16_t gSpiTxPayloadSize;
-static bool gSpiTxReady = false;
-static bool gSpiTxFlowControl = false;
-static uint8_t gSpiTxFrameBuffer[MAX_FRAME_SIZE] = { SPI_HEADER_RESET_FLAG };
+static int sSpiSpeed            = 1000000; // in Hz (default: 1MHz)
+static uint8_t sSpiMode         = 0;
+static int sSpiCsDelay          = 20;
+static int sSpiTransactionDelay = 200;
 
-static bool gSlaveDidReset = false;
+static uint16_t sSpiRxPayloadSize;
+static uint8_t sSpiRxFrameBuffer[MAX_FRAME_SIZE + SPI_RX_ALIGN_ALLOWANCE_MAX];
 
-static int gRet = 0;
+static uint16_t sSpiTxPayloadSize;
+static bool sSpiTxIsReady = false;
+static bool sSpiTxFlowControl = false;
+static uint8_t sSpiTxFrameBuffer[MAX_FRAME_SIZE + SPI_RX_ALIGN_ALLOWANCE_MAX];
 
-static sig_t gPreviousHandlerForSIGINT;
-static sig_t gPreviousHandlerForSIGTERM;
+static int sSpiRxAlignAllowance = 0;
+
+static uint32_t sSpiFrameCount = 0;
+static uint32_t sSpiValidFrameCount = 0;
+
+static bool sSlaveDidReset = false;
+
+static int sRet = 0;
+
+static sig_t sPreviousHandlerForSIGINT;
+static sig_t sPreviousHandlerForSIGTERM;
 
 /* ------------------------------------------------------------------------- */
 /* MARK: Signal Handlers */
 
 static void signal_SIGINT(int sig)
 {
-    gRet = EXIT_QUIT;
-    syslog(LOG_NOTICE, "Caught SIGINT!");
+    static const char message[] = "\nCaught SIGINT!\n";
+
+    sRet = EXIT_QUIT;
+
+    // Can't use syslog() because it isn't async signal safe.
+    // So we write to stderr
+    IGNORE_RETURN_VALUE(write(STDERR_FILENO, message, sizeof(message)-1));
 
     // Restore the previous handler so that if we end up getting
     // this signal again we peform the system default action.
-    signal(SIGINT, gPreviousHandlerForSIGINT);
-    gPreviousHandlerForSIGINT = NULL;
+    signal(SIGINT, sPreviousHandlerForSIGINT);
+    sPreviousHandlerForSIGINT = NULL;
 
     (void)sig;
 }
 
 static void signal_SIGTERM(int sig)
 {
-    gRet = EXIT_QUIT;
-    syslog(LOG_NOTICE, "Caught SIGTERM!");
+    static const char message[] = "\nCaught SIGTERM!\n";
+
+    sRet = EXIT_QUIT;
+
+    // Can't use syslog() because it isn't async signal safe.
+    // So we write to stderr
+    IGNORE_RETURN_VALUE(write(STDERR_FILENO, message, sizeof(message)-1));
 
     // Restore the previous handler so that if we end up getting
     // this signal again we peform the system default action.
-    signal(SIGTERM, gPreviousHandlerForSIGTERM);
-    gPreviousHandlerForSIGTERM = NULL;
+    signal(SIGTERM, sPreviousHandlerForSIGTERM);
+    sPreviousHandlerForSIGTERM = NULL;
     (void) sig;
 }
 
 static void signal_SIGHUP(int sig)
 {
-    gRet = EXIT_FAILURE;
-    syslog(LOG_NOTICE, "Caught SIGHUP!");
+    static const char message[] = "\nCaught SIGHUP!\n";
+
+    sRet = EXIT_FAILURE;
+
+    // Can't use syslog() because it isn't async signal safe.
+    // So we write to stderr
+    IGNORE_RETURN_VALUE(write(STDERR_FILENO, message, sizeof(message)-1));
 
     // We don't restore the "previous handler"
     // because we always want to let the main
@@ -182,6 +223,16 @@ static void signal_critical(int sig, siginfo_t * info, void * ucontext)
     // Shut up compiler warning.
     (void)uc;
     (void)info;
+
+    // We call some functions here which aren't async-signal-safe,
+    // but this function isn't really useful without those calls.
+    // Since we are making a gamble (and we deadlock if we loose),
+    // we are going to set up a two-second watchdog to make sure
+    // we end up terminating like we should. The choice of a two
+    // second timeout is entirely arbitrary, and may be changed
+    // if needs warrant.
+    alarm(2);
+    signal(SIGALRM, SIG_DFL);
 
     fprintf(stderr, " *** FATAL ERROR: Caught signal %d (%s):\n", sig, strsignal(sig));
 
@@ -217,99 +268,188 @@ static void signal_critical(int sig, siginfo_t * info, void * ucontext)
     exit(EXIT_FAILURE);
 }
 
+static void log_debug_buffer(const char* desc, const uint8_t* buffer_ptr, int buffer_len)
+{
+    int i = 0;
 
+    if (sVerbose < LOG_DEBUG)
+    {
+        return;
+    }
+
+    while (i < buffer_len)
+    {
+        int j;
+        char dump_string[SOCKET_DEBUG_BYTES_PER_LINE*3+1];
+
+        for (j = 0; i < buffer_len && j < SOCKET_DEBUG_BYTES_PER_LINE; i++, j++)
+        {
+            sprintf(dump_string+j*3, "%02X ", buffer_ptr[i]);
+        }
+
+        syslog(LOG_DEBUG, "%s: %s%s", desc, dump_string, (i < buffer_len)?" ...":"");
+    }
+}
 
 /* ------------------------------------------------------------------------- */
 /* MARK: SPI Transfer Functions */
 
-static void spi_cs_delay(void)
- {
-    struct spi_ioc_transfer xfer = {
-        .tx_buf = (unsigned long)NULL,
-        .rx_buf = (unsigned long)NULL,
-        .len = 0,
-        .delay_usecs = gSpiBeginDelay,
-        .speed_hz = gSpiSpeed,
-        .bits_per_word = 8,
-        .cs_change = false,
-    };
+static void spi_header_set_flag_byte(uint8_t *header, uint8_t value)
+{
+    header[0] = value;
+}
 
-    // We don't care if this fails.
-    ioctl(gSpiDevFd, SPI_IOC_MESSAGE(1), &xfer);
+static void spi_header_set_accept_len(uint8_t *header, uint16_t len)
+{
+    header[1] = ((len >> 0) & 0xFF);
+    header[2] = ((len >> 8) & 0xFF);
+}
+
+static void spi_header_set_data_len(uint8_t *header, uint16_t len)
+{
+    header[3] = ((len >> 0) & 0xFF);
+    header[4] = ((len >> 8) & 0xFF);
+}
+
+static uint8_t spi_header_get_flag_byte(const uint8_t *header)
+{
+    return header[0];
+}
+
+static uint16_t spi_header_get_accept_len(const uint8_t *header)
+{
+    return ( header[1] + (header[2] << 8) );
+}
+
+static uint16_t spi_header_get_data_len(const uint8_t *header)
+{
+    return ( header[3] + (header[4] << 8) );
+}
+
+static uint8_t* get_real_rx_frame_start(void)
+{
+    uint8_t* ret = sSpiRxFrameBuffer;
+    int i = 0;
+
+    for (i = 0; i < sSpiRxAlignAllowance; i++)
+    {
+        if (ret[0] != 0xFF)
+        {
+            break;
+        }
+        ret++;
+    }
+
+    return ret;
 }
 
 static int do_spi_xfer(int len)
  {
     int ret;
 
-    struct spi_ioc_transfer xfer = {
-        .tx_buf = (unsigned long)gSpiTxFrameBuffer,
-        .rx_buf = (unsigned long)gSpiRxFrameBuffer,
-        .len = len + HEADER_LEN,
-        .delay_usecs = 0,
-        .speed_hz = gSpiSpeed,
-        .bits_per_word = 8,
-        .cs_change = false,
+    struct spi_ioc_transfer xfer[2] =
+    {
+        {   // This part is the delay between C̅S̅ being
+            // asserted and the SPI clock starting. This
+            // is not supported by all Linux SPI drivers.
+            .tx_buf = 0,
+            .rx_buf = 0,
+            .len = 0,
+            .delay_usecs = sSpiCsDelay,
+            .speed_hz = sSpiSpeed,
+            .bits_per_word = 8,
+            .cs_change = false,
+        },
+        {   // This part is the actual SPI transfer.
+            .tx_buf = (unsigned long)sSpiTxFrameBuffer,
+            .rx_buf = (unsigned long)sSpiRxFrameBuffer,
+            .len = len + HEADER_LEN + sSpiRxAlignAllowance,
+            .delay_usecs = 0,
+            .speed_hz = sSpiSpeed,
+            .bits_per_word = 8,
+            .cs_change = false,
+        }
     };
 
-    if (gSpiBeginDelay > 0)
+    if (sSpiCsDelay > 0)
     {
-        spi_cs_delay();
+        // A C̅S̅ delay has been specified. Start transactions
+        // with both parts.
+        ret = ioctl(sSpiDevFd, SPI_IOC_MESSAGE(2), &xfer[0]);
+    }
+    else
+    {
+        // No C̅S̅ delay has been specified, so we skip the first
+        // part because it causes some SPI drivers to croak.
+        ret = ioctl(sSpiDevFd, SPI_IOC_MESSAGE(1), &xfer[1]);
     }
 
-    ret = ioctl(gSpiDevFd, SPI_IOC_MESSAGE(1), &xfer);
-
-    if (gSpiRxFrameBuffer[0] != 0xFF)
+    if (ret != -1)
     {
-        if (gSpiRxFrameBuffer[0] & SPI_HEADER_RESET_FLAG)
+        log_debug_buffer("SPI-TX", sSpiTxFrameBuffer, xfer[1].len);
+        log_debug_buffer("SPI-RX", sSpiRxFrameBuffer, xfer[1].len);
+
+        if (spi_header_get_flag_byte(sSpiRxFrameBuffer) != 0xFF)
         {
-            gSlaveDidReset = true;
+            if (spi_header_get_flag_byte(sSpiRxFrameBuffer) & SPI_HEADER_RESET_FLAG)
+            {
+                sSlaveDidReset = true;
+            }
         }
+
+        sSpiFrameCount++;
     }
 
     return ret;
 }
 
-
-static void spi_header_set_accept_len(uint8_t *header, uint16_t len)
+static void debug_spi_header(const char* hint)
 {
-    header[1] = ((len << 0) & 0xFF);
-    header[2] = ((len << 8) & 0xFF);
+    if (sVerbose >= LOG_DEBUG)
+    {
+        const uint8_t* spiRxFrameBuffer = get_real_rx_frame_start();
+
+        syslog(LOG_DEBUG, "%s-TX: H:%02X ACCEPT:%d DATA:%0d\n",
+            hint,
+            spi_header_get_flag_byte(sSpiTxFrameBuffer),
+            spi_header_get_accept_len(sSpiTxFrameBuffer),
+            spi_header_get_data_len(sSpiTxFrameBuffer)
+        );
+
+        syslog(LOG_DEBUG, "%s-RX: H:%02X ACCEPT:%d DATA:%0d\n",
+            hint,
+            spi_header_get_flag_byte(spiRxFrameBuffer),
+            spi_header_get_accept_len(spiRxFrameBuffer),
+            spi_header_get_data_len(spiRxFrameBuffer)
+        );
+    }
 }
 
-static void spi_header_set_data_len(uint8_t *header, uint16_t len)
+static int push_pull_spi(void)
 {
-    header[3] = ((len << 0) & 0xFF);
-    header[4] = ((len << 8) & 0xFF);
-}
-
-static uint16_t spi_header_get_accept_len(uint8_t *header)
-{
-    return ( header[1] + (header[2] << 8) );
-}
-
-static uint16_t spi_header_get_data_len(uint8_t *header)
-{
-    return ( header[3] + (header[4] << 8) );
-}
-
-
-static int push_pull_spi()
- {
     int ret;
     uint16_t slave_max_rx;
     uint16_t slave_data_len;
     int spi_xfer_bytes = 0;
+    const uint8_t* spiRxFrameBuffer = NULL;
 
-    gSpiTxFlowControl = false;
+    sSpiTxFlowControl = false;
 
     // Fetch the slave's buffer sizes.
     // Zero out our max rx and data len
     // so that the slave doesn't think
     // we are actually trying to transfer
     // data.
-    spi_header_set_accept_len(gSpiTxFrameBuffer, 0);
-    spi_header_set_data_len(gSpiTxFrameBuffer, 0);
+    if (sSpiValidFrameCount == 0)
+    {
+        spi_header_set_flag_byte(sSpiTxFrameBuffer, SPI_HEADER_RESET_FLAG|SPI_HEADER_PATTERN_VALUE);
+    }
+    else
+    {
+        spi_header_set_flag_byte(sSpiTxFrameBuffer, SPI_HEADER_PATTERN_VALUE);
+    }
+    spi_header_set_accept_len(sSpiTxFrameBuffer, 0);
+    spi_header_set_data_len(sSpiTxFrameBuffer, 0);
     ret = do_spi_xfer(0);
     if (ret < 0)
     {
@@ -317,23 +457,27 @@ static int push_pull_spi()
         goto bail;
     }
 
-    if (gSpiRxFrameBuffer[0] == 0xFF)
+    spiRxFrameBuffer = get_real_rx_frame_start();
+
+    debug_spi_header("push_pull_1");
+
+    if (spi_header_get_flag_byte(spiRxFrameBuffer) == 0xFF)
     {
         // Device is off or in a bad state.
-        gSpiTxFlowControl = true;
+        sSpiTxFlowControl = true;
 
         syslog(LOG_DEBUG, "Discarded frame. (1)");
         goto bail;
     }
 
-    slave_max_rx = spi_header_get_accept_len(gSpiRxFrameBuffer);
-    slave_data_len = spi_header_get_data_len(gSpiRxFrameBuffer);
+    slave_max_rx = spi_header_get_accept_len(spiRxFrameBuffer);
+    slave_data_len = spi_header_get_data_len(spiRxFrameBuffer);
 
     if ( (slave_max_rx > MAX_FRAME_SIZE)
       || (slave_data_len > MAX_FRAME_SIZE)
     )
     {
-        gSpiTxFlowControl = true;
+        sSpiTxFlowControl = true;
         syslog(
             LOG_INFO,
             "Gibberish in header (max_rx:%d, data_len:%d)",
@@ -343,32 +487,44 @@ static int push_pull_spi()
         goto bail;
     }
 
-    if ( (gSpiTxReady != 0)
-      && (gSpiTxPayloadSize <= slave_max_rx)
+    sSpiValidFrameCount++;
+
+    if (!sSpiTxIsReady && (slave_data_len == 0))
+    {
+        // Nothing to do.
+        goto bail;
+    }
+
+    if ( sSpiTxIsReady
+      && (sSpiTxPayloadSize <= slave_max_rx)
     )
     {
-        spi_xfer_bytes = gSpiTxPayloadSize;
-        spi_header_set_data_len(gSpiTxFrameBuffer, gSpiTxPayloadSize);
+        spi_xfer_bytes = sSpiTxPayloadSize;
+        spi_header_set_data_len(sSpiTxFrameBuffer, sSpiTxPayloadSize);
     }
-    else if (gSpiTxReady && (gSpiTxPayloadSize > slave_max_rx))
+    else if (sSpiTxIsReady && (sSpiTxPayloadSize > slave_max_rx))
     {
         // The slave isn't ready for what we have to
         // send them. Turn on rate limiting so that we
         // don't waste a ton of CPU bombarding them
         // with useless SPI transfers.
-        gSpiTxFlowControl = true;
+        sSpiTxFlowControl = true;
     }
 
     if ( (slave_data_len != 0)
-      && (gSpiRxPayloadSize == 0)
+      && (sSpiRxPayloadSize == 0)
     )
     {
-        spi_header_set_accept_len(gSpiTxFrameBuffer, slave_data_len);
+        spi_header_set_accept_len(sSpiTxFrameBuffer, slave_data_len);
         if (slave_data_len > spi_xfer_bytes)
         {
             spi_xfer_bytes = slave_data_len;
         }
     }
+
+    usleep(sSpiTransactionDelay);
+
+    spi_header_set_flag_byte(sSpiTxFrameBuffer, SPI_HEADER_PATTERN_VALUE);
 
     // This is the real transfer.
     ret = do_spi_xfer(spi_xfer_bytes);
@@ -378,34 +534,54 @@ static int push_pull_spi()
         goto bail;
     }
 
-    if (gSpiRxFrameBuffer[0] == 0xFF)
+    spiRxFrameBuffer = get_real_rx_frame_start();
+
+    debug_spi_header("push_pull_2");
+
+    if (spi_header_get_flag_byte(spiRxFrameBuffer) == 0xFF)
     {
         // Device is off or in a bad state.
-        gSpiTxFlowControl = true;
+        sSpiTxFlowControl = true;
 
         syslog(LOG_DEBUG, "Discarded frame. (2)");
         goto bail;
     }
 
-    slave_max_rx = spi_header_get_accept_len(gSpiRxFrameBuffer);
-    slave_data_len = spi_header_get_data_len(gSpiRxFrameBuffer);
+    slave_max_rx = spi_header_get_accept_len(spiRxFrameBuffer);
+    slave_data_len = spi_header_get_data_len(spiRxFrameBuffer);
 
-    if ( (gSpiRxPayloadSize == 0)
-      && (slave_data_len <= spi_header_get_accept_len(gSpiTxFrameBuffer))
-    ) {
-        // We have received a packet. Set gSpiRxPayloadSize so that
-        // the packet will eventually get queued up by push_hdlc().
-        gSpiRxPayloadSize = slave_data_len;
+    if ( (slave_max_rx > MAX_FRAME_SIZE)
+      || (slave_data_len > MAX_FRAME_SIZE)
+    )
+    {
+        sSpiTxFlowControl = true;
+        syslog(
+            LOG_INFO,
+            "Gibberish in header (max_rx:%d, data_len:%d)",
+            slave_max_rx,
+            slave_data_len
+        );
+        goto bail;
     }
 
-    if ( (gSpiTxPayloadSize == spi_header_get_data_len(gSpiTxFrameBuffer))
-      && (spi_header_get_data_len(gSpiTxFrameBuffer) <= slave_max_rx)
+    sSpiValidFrameCount++;
+
+    if ( (sSpiRxPayloadSize == 0)
+      && (slave_data_len <= spi_header_get_accept_len(sSpiTxFrameBuffer))
+    ) {
+        // We have received a packet. Set sSpiRxPayloadSize so that
+        // the packet will eventually get queued up by push_hdlc().
+        sSpiRxPayloadSize = slave_data_len;
+    }
+
+    if ( (sSpiTxPayloadSize == spi_header_get_data_len(sSpiTxFrameBuffer))
+      && (spi_header_get_data_len(sSpiTxFrameBuffer) <= slave_max_rx)
     ) {
         // Out outbound packet has been successfully transmitted. Clear
-        // gSpiTxPayloadSize and gSpiTxReady so that pull_hdlc() can
+        // sSpiTxPayloadSize and sSpiTxIsReady so that pull_hdlc() can
         // pull another packet for us to send.
-        gSpiTxReady = false;
-        gSpiTxPayloadSize = 0;
+        sSpiTxIsReady = false;
+        sSpiTxPayloadSize = 0;
     }
 
 bail:
@@ -417,17 +593,18 @@ static bool check_and_clear_interrupt(void)
     char value[5] = "";
     int len;
 
-    lseek(gIntGpioValueFd, 0, SEEK_SET);
+    lseek(sIntGpioValueFd, 0, SEEK_SET);
 
-    len = read(gIntGpioValueFd, value, sizeof(value)-1);
+    len = read(sIntGpioValueFd, value, sizeof(value)-1);
 
     if (len < 0)
     {
         perror("check_and_clear_interrupt");
-        gRet = EXIT_FAILURE;
+        sRet = EXIT_FAILURE;
     }
 
-    return 0 != atoi(value);
+    // The interrupt pin is active low.
+    return GPIO_INT_ASSERT_STATE == atoi(value);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -514,30 +691,30 @@ static bool hdlc_byte_needs_escape(uint8_t byte)
 static int push_hdlc(void)
 {
     int ret = 0;
+    const uint8_t* spiRxFrameBuffer = get_real_rx_frame_start();
     static uint8_t escaped_frame_buffer[MAX_FRAME_SIZE*2];
     static uint16_t escaped_frame_len;
     static uint16_t escaped_frame_sent;
 
     if (escaped_frame_len == 0)
     {
-        if (gSlaveDidReset)
+        if (sSlaveDidReset)
         {
             // Indicate an MCU reset.
-            memcpy(escaped_frame_buffer, kHDLCResetSignal, sizeof(kHDLCResetSignal));
-            escaped_frame_len = sizeof(kHDLCResetSignal);
-            gSlaveDidReset = false;
-
+            memcpy(escaped_frame_buffer, kHdlcResetSignal, sizeof(kHdlcResetSignal));
+            escaped_frame_len = sizeof(kHdlcResetSignal);
+            sSlaveDidReset = false;
         }
-        else if (gSpiRxPayloadSize != 0)
+        else if (sSpiRxPayloadSize != 0)
         {
             // Escape the frame.
             uint8_t c;
-            uint16_t fcs = 0x0000;
+            uint16_t fcs = kHdlcCrcResetValue;
             uint16_t i;
 
-            for (i = 0; i < gSpiRxPayloadSize; i++)
+            for (i = 0; i < sSpiRxPayloadSize; i++)
             {
-                c = gSpiRxFrameBuffer[i];
+                c = spiRxFrameBuffer[i + HEADER_LEN];
                 fcs = hdlc_crc16(fcs, c);
                 if (hdlc_byte_needs_escape(c))
                 {
@@ -576,7 +753,7 @@ static int push_hdlc(void)
 
             escaped_frame_buffer[escaped_frame_len++] = HDLC_BYTE_FLAG;
             escaped_frame_sent = 0;
-            gSpiRxPayloadSize = 0;
+            sSpiRxPayloadSize = 0;
 
         }
         else
@@ -587,7 +764,7 @@ static int push_hdlc(void)
     }
 
     ret = write(
-        gHDLCOutputFd,
+        sHdlcOutputFd,
         escaped_frame_buffer + escaped_frame_sent,
         escaped_frame_len    - escaped_frame_sent
     );
@@ -626,47 +803,47 @@ static int pull_hdlc(void)
     static uint16_t fcs;
     static bool unescape_next_byte = false;
 
-    if (!gSpiTxReady)
+    if (!sSpiTxIsReady)
     {
         uint8_t byte;
-        while ((ret = read(gHDLCInputFd, &byte, 1)) == 1)
+        while ((ret = read(sHdlcInputFd, &byte, 1)) == 1)
         {
-            if (gSpiTxPayloadSize >= (MAX_FRAME_SIZE - HEADER_LEN))
+            if (sSpiTxPayloadSize >= (MAX_FRAME_SIZE - HEADER_LEN))
             {
                 syslog(LOG_WARNING, "HDLC frame was too big");
                 unescape_next_byte = false;
-                gSpiTxPayloadSize = 0;
-                fcs = 0;
+                sSpiTxPayloadSize = 0;
+                fcs = kHdlcCrcResetValue;
 
             }
             else if (byte == HDLC_BYTE_FLAG)
             {
-                if (gSpiTxPayloadSize <= 2)
+                if (sSpiTxPayloadSize <= 2)
                 {
                     unescape_next_byte = false;
-                    gSpiTxPayloadSize = 0;
-                    fcs = 0;
+                    sSpiTxPayloadSize = 0;
+                    fcs = kHdlcCrcResetValue;
                     continue;
 
                 }
-                else if (fcs != kHDLCCRCCheckValue)
+                else if (fcs != kHdlcCrcCheckValue)
                 {
-                    syslog(LOG_WARNING, "HDLC frame with bad CRC");
+                    syslog(LOG_WARNING, "HDLC frame with bad CRC (LEN:%d, FCS:0x%04X)", sSpiTxPayloadSize, fcs);
                     unescape_next_byte = false;
-                    gSpiTxPayloadSize = 0;
-                    fcs = 0;
+                    sSpiTxPayloadSize = 0;
+                    fcs = kHdlcCrcResetValue;
                     continue;
                 }
 
                 // Clip off the CRC
-                gSpiTxPayloadSize -= 2;
+                sSpiTxPayloadSize -= 2;
 
                 // Indicate that a frame is ready to go out
-                gSpiTxReady = true;
+                sSpiTxIsReady = true;
 
                 // Clean up for the next frame
                 unescape_next_byte = false;
-                fcs = 0;
+                fcs = kHdlcCrcResetValue;
                 break;
 
             }
@@ -685,10 +862,11 @@ static int pull_hdlc(void)
             else if (unescape_next_byte)
             {
                 byte = byte ^ HDLC_ESCAPE_XFORM;
+                unescape_next_byte = false;
             }
 
             fcs = hdlc_crc16(fcs, byte);
-            gSpiTxFrameBuffer[HEADER_LEN + gSpiTxPayloadSize++] = byte;
+            sSpiTxFrameBuffer[HEADER_LEN + sSpiTxPayloadSize++] = byte;
         }
     }
 
@@ -716,10 +894,10 @@ static int pull_hdlc(void)
 
 static bool update_spi_mode(int x)
 {
-    gSpiMode = (uint8_t)x;
+    sSpiMode = (uint8_t)x;
 
-    if ( (gSpiDevFd >= 0)
-      && (ioctl(gSpiDevFd, SPI_IOC_WR_MODE, &gSpiMode) < 0)
+    if ( (sSpiDevFd >= 0)
+      && (ioctl(sSpiDevFd, SPI_IOC_WR_MODE, &sSpiMode) < 0)
     )
     {
         perror("ioctl(SPI_IOC_WR_MODE)");
@@ -731,10 +909,10 @@ static bool update_spi_mode(int x)
 
 static bool update_spi_speed(int x)
 {
-    gSpiSpeed = x;
+    sSpiSpeed = x;
 
-    if ( (gSpiDevFd >= 0)
-      && (ioctl(gSpiDevFd, SPI_IOC_WR_MAX_SPEED_HZ, &gSpiSpeed) < 0)
+    if ( (sSpiDevFd >= 0)
+      && (ioctl(sSpiDevFd, SPI_IOC_WR_MAX_SPEED_HZ, &sSpiSpeed) < 0)
     )
     {
         perror("ioctl(SPI_IOC_WR_MAX_SPEED_HZ)");
@@ -750,7 +928,7 @@ static bool setup_spi_dev(const char* path)
     int fd = -1;
     const uint8_t spi_word_bits = 8;
     int ret;
-    gSpiDevPath = path;
+    sSpiDevPath = path;
 
     fd = open(path, O_RDWR);
     if (fd < 0)
@@ -760,7 +938,7 @@ static bool setup_spi_dev(const char* path)
     }
 
     // Set the SPI mode.
-    ret = ioctl(fd, SPI_IOC_WR_MODE, &gSpiMode);
+    ret = ioctl(fd, SPI_IOC_WR_MODE, &sSpiMode);
     if (ret < 0)
     {
         perror("ioctl(SPI_IOC_WR_MODE)");
@@ -768,7 +946,7 @@ static bool setup_spi_dev(const char* path)
     }
 
     // Set the SPI clock speed.
-    ret = ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &gSpiSpeed);
+    ret = ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &sSpiSpeed);
     if (ret < 0)
     {
         perror("ioctl(SPI_IOC_WR_MAX_SPEED_HZ)");
@@ -790,7 +968,7 @@ static bool setup_spi_dev(const char* path)
         goto bail;
     }
 
-    gSpiDevFd = fd;
+    sSpiDevFd = fd;
     fd = -1;
 
 bail:
@@ -798,7 +976,7 @@ bail:
     {
         close(fd);
     }
-    return gSpiDevFd >= 0;
+    return sSpiDevFd >= 0;
 }
 
 static bool setup_res_gpio(const char* path)
@@ -808,7 +986,7 @@ static bool setup_res_gpio(const char* path)
     char* value_path = NULL;
     int len;
 
-    gResGpioDevPath = path;
+    sResGpioDevPath = path;
 
     len = asprintf(&dir_path, "%s/direction", path);
 
@@ -837,7 +1015,7 @@ static bool setup_res_gpio(const char* path)
         }
     }
 
-    gResGpioValueFd = open(value_path, O_WRONLY);
+    sResGpioValueFd = open(value_path, O_WRONLY);
 
 bail:
 
@@ -856,25 +1034,30 @@ bail:
         free(value_path);
     }
 
-    return gResGpioValueFd >= 0;
+    return sResGpioValueFd >= 0;
 }
 
 static void trigger_reset(void)
 {
-    if (gResGpioValueFd >= 0)
+    if (sResGpioValueFd >= 0)
     {
-        lseek(gResGpioValueFd, 0, SEEK_SET);
-        if (write(gResGpioValueFd, "0\n", 2) == -1)
+        char str[] = { '0' + GPIO_RES_ASSERT_STATE, '\n' };
+
+        lseek(sResGpioValueFd, 0, SEEK_SET);
+        if (write(sResGpioValueFd, str, sizeof(str)) == -1)
         {
-           // TODO: Handle error
+            syslog(LOG_ERR, "trigger_reset(): error on write: %d (%s)", errno, strerror(errno));
         }
 
         usleep(10 * USEC_PER_MSEC);
 
-        lseek(gResGpioValueFd, 0, SEEK_SET);
-        if (write(gResGpioValueFd, "1\n", 2) == -1)
+        // Set the string to switch to the not-asserted state.
+        str[0] = '0' + !GPIO_RES_ASSERT_STATE;
+
+        lseek(sResGpioValueFd, 0, SEEK_SET);
+        if (write(sResGpioValueFd, str, sizeof(str)) == -1)
         {
-           // TODO: Handle error
+            syslog(LOG_ERR, "trigger_reset(): error on write: %d (%s)", errno, strerror(errno));
         }
 
         syslog(LOG_NOTICE, "Triggered hardware reset");
@@ -889,9 +1072,9 @@ static bool setup_int_gpio(const char* path)
     int len;
     int setup_fd = -1;
 
-    gIntGpioValueFd = -1;
+    sIntGpioValueFd = -1;
 
-    gIntGpioDevPath = path;
+    sIntGpioDevPath = path;
 
     len = asprintf(&dir_path, "%s/direction", path);
 
@@ -950,7 +1133,7 @@ static bool setup_int_gpio(const char* path)
         setup_fd = -1;
     }
 
-    gIntGpioValueFd = open(value_path, O_RDONLY);
+    sIntGpioValueFd = open(value_path, O_RDONLY);
 
 bail:
 
@@ -974,7 +1157,7 @@ bail:
         free(value_path);
     }
 
-    return gIntGpioValueFd >= 0;
+    return sIntGpioValueFd >= 0;
 }
 
 
@@ -1015,6 +1198,9 @@ static void print_help(void)
     "                                   GPIO directory for the `R̅E̅S̅` pin.\n"
     "    --spi-mode[=mode] ............ Specify the SPI mode to use (0-3).\n"
     "    --spi-speed[=hertz] .......... Specify the SPI speed in hertz.\n"
+    "    --spi-cs-delay[=usec] ........ Specify the delay after C̅S̅ assertion, in usec\n"
+    "    --spi-align-allowance[=n] .... Specify the the maximum number of FF bytes to\n"
+    "                                   clip from start of RX frame.\n"
     "    -v/--verbose ................. Increase debug verbosity. (Repeatable)\n"
     "    -h/-?/--help ................. Print out usage information and exit.\n"
     "\n";
@@ -1038,20 +1224,24 @@ int main(int argc, char *argv[])
     int max_fd = -1;
     enum {
         ARG_SPI_MODE = 1001,
-        ARG_SPI_SPEED = 1002
+        ARG_SPI_SPEED = 1002,
+        ARG_VERBOSE = 1003,
+        ARG_SPI_CS_DELAY = 1004,
+        ARG_SPI_ALIGN_ALLOWANCE = 1005,
     };
 
     static struct option options[] = {
-        { "stdio",      no_argument,       &gMode, MODE_STDIO    },
-        { "pty",        no_argument,       &gMode, MODE_PTY      },
+        { "stdio",      no_argument,       &sMode, MODE_STDIO    },
+        { "pty",        no_argument,       &sMode, MODE_PTY      },
         { "gpio-int",   required_argument, NULL,   'i'           },
         { "gpio-res",   required_argument, NULL,   'r'           },
-        { "verbose",    optional_argument, NULL,   'v'           },
+        { "verbose",    optional_argument, NULL,   ARG_VERBOSE   },
         { "version",    no_argument,       NULL,   'V'           },
         { "help",       no_argument,       NULL,   'h'           },
         { "spi-mode",   required_argument, NULL,   ARG_SPI_MODE  },
         { "spi-speed",  required_argument, NULL,   ARG_SPI_SPEED },
-
+        { "spi-cs-delay",required_argument,NULL,   ARG_SPI_CS_DELAY },
+        { "spi-align-allowance", required_argument, NULL, ARG_SPI_ALIGN_ALLOWANCE },
         { NULL,         0,                 NULL,   0             },
     };
 
@@ -1065,8 +1255,8 @@ int main(int argc, char *argv[])
     // ========================================================================
     // INITIALIZATION
 
-    gPreviousHandlerForSIGINT = signal(SIGINT, &signal_SIGINT);
-    gPreviousHandlerForSIGTERM = signal(SIGTERM, &signal_SIGTERM);
+    sPreviousHandlerForSIGINT = signal(SIGINT, &signal_SIGINT);
+    sPreviousHandlerForSIGTERM = signal(SIGTERM, &signal_SIGTERM);
     signal(SIGHUP, &signal_SIGHUP);
 
     sigact.sa_sigaction = &signal_critical;
@@ -1083,11 +1273,11 @@ int main(int argc, char *argv[])
 
     openlog(basename(prog), LOG_PERROR | LOG_PID | LOG_CONS, LOG_DAEMON);
 
-    setlogmask(setlogmask(0) & LOG_UPTO(gVerbose));
+    setlogmask(setlogmask(0) & LOG_UPTO(sVerbose));
 
     while (1)
     {
-        int c = getopt_long(argc, argv, "i:r:v:Vh?", options, NULL);
+        int c = getopt_long(argc, argv, "i:r:vVh?", options, NULL);
         if (c == -1)
         {
             break;
@@ -1100,6 +1290,16 @@ int main(int argc, char *argv[])
                 if (!setup_int_gpio(optarg))
                 {
                     syslog(LOG_ERR, "Unable to setup INT GPIO \"%s\", %s", optarg, strerror(errno));
+                    exit(EXIT_FAILURE);
+                }
+                break;
+
+            case ARG_SPI_ALIGN_ALLOWANCE:
+                errno = 0;
+                sSpiRxAlignAllowance = atoi(optarg);
+                if (errno != 0 || (sSpiRxAlignAllowance > SPI_RX_ALIGN_ALLOWANCE_MAX))
+                {
+                    syslog(LOG_ERR, "Invalid SPI RX Align Allowance \"%s\" (MAX: %d)", optarg, SPI_RX_ALIGN_ALLOWANCE_MAX);
                     exit(EXIT_FAILURE);
                 }
                 break;
@@ -1120,6 +1320,11 @@ int main(int argc, char *argv[])
                 }
                 break;
 
+            case ARG_SPI_CS_DELAY:
+                sSpiCsDelay = atoi(optarg);
+                syslog(LOG_NOTICE, "SPI CS Delay set to %d usec", sSpiCsDelay);
+                break;
+
             case 'r':
                 if (!setup_res_gpio(optarg))
                 {
@@ -1129,17 +1334,19 @@ int main(int argc, char *argv[])
                 break;
 
             case 'v':
-                if (gVerbose < LOG_DEBUG)
+            case ARG_VERBOSE:
+                if (sVerbose < LOG_DEBUG)
                 {
                     if (optarg)
                     {
-                        gVerbose += atoi(optarg);
+                        sVerbose += atoi(optarg);
                     }
                     else
                     {
-                        gVerbose++;
+                        sVerbose++;
                     }
-                    setlogmask(setlogmask(0) & LOG_UPTO(gVerbose));
+                    setlogmask(setlogmask(0) | LOG_UPTO(sVerbose));
+                    syslog(sVerbose, "Verbosity set to level %d", sVerbose);
                 }
                 break;
 
@@ -1164,7 +1371,7 @@ int main(int argc, char *argv[])
     {
         if (!setup_spi_dev(argv[0]))
         {
-            syslog(LOG_ERR, "%s: Unable to open SPI device \"%s\", %s", prog, argv[optind], strerror(errno));
+            syslog(LOG_ERR, "%s: Unable to open SPI device \"%s\", %s", prog, argv[0], strerror(errno));
             exit(EXIT_FAILURE);
         }
         argc--;
@@ -1177,35 +1384,35 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    if (gSpiDevPath == NULL)
+    if (sSpiDevPath == NULL)
     {
         fprintf(stderr, "%s: Missing SPI device path\n", prog);
         exit(EXIT_FAILURE);
     }
 
-    if (gMode == MODE_STDIO)
+    if (sMode == MODE_STDIO)
     {
-        gHDLCInputFd = dup(STDIN_FILENO);
-        gHDLCOutputFd = dup(STDOUT_FILENO);
+        sHdlcInputFd = dup(STDIN_FILENO);
+        sHdlcOutputFd = dup(STDOUT_FILENO);
         close(STDIN_FILENO);
         close(STDOUT_FILENO);
 
     }
-    else if (gMode == MODE_PTY)
+    else if (sMode == MODE_PTY)
     {
 #if HAVE_OPENPTY
 
         static int pty_slave_fd = -1;
         char pty_name[1024];
-        gRet = openpty(&gHDLCInputFd, &pty_slave_fd, pty_name, NULL, NULL);
+        sRet = openpty(&sHdlcInputFd, &pty_slave_fd, pty_name, NULL, NULL);
 
-        if (gRet != 0)
+        if (sRet != 0)
         {
             perror("openpty");
             goto bail;
         }
 
-        gHDLCOutputFd = dup(gHDLCInputFd);
+        sHdlcOutputFd = dup(sHdlcInputFd);
 
         printf("%s\n", pty_name);
 
@@ -1214,7 +1421,7 @@ int main(int argc, char *argv[])
 #else // if HAVE_OPENPTY
 
         syslog(LOG_ERR, "Not built with support for `--pty`.");
-        gRet = EXIT_FAILURE;
+        sRet = EXIT_FAILURE;
         goto bail;
 
 #endif // else HAVE_OPENPTY
@@ -1222,34 +1429,34 @@ int main(int argc, char *argv[])
     }
     else
     {
-        gRet = EXIT_FAILURE;
+        sRet = EXIT_FAILURE;
         goto bail;
     }
 
-    // Set up gHDLCInputFd for non-blocking I/O
-    if (-1 == (i = fcntl(gHDLCInputFd, F_GETFL, 0)))
+    // Set up sHdlcInputFd for non-blocking I/O
+    if (-1 == (i = fcntl(sHdlcInputFd, F_GETFL, 0)))
     {
         i = 0;
     }
-    fcntl(gHDLCInputFd, F_SETFL, i | O_NONBLOCK);
+    fcntl(sHdlcInputFd, F_SETFL, i | O_NONBLOCK);
 
     // Since there are so few file descriptors in
     // this program, we calcualte `max_fd` once
     // instead of trying to optimize its value
     // at every iteration.
-    max_fd = gHDLCInputFd;
+    max_fd = sHdlcInputFd;
 
-    if (max_fd < gHDLCOutputFd)
+    if (max_fd < sHdlcOutputFd)
     {
-        max_fd = gHDLCOutputFd;
+        max_fd = sHdlcOutputFd;
     }
 
-    if (max_fd < gIntGpioValueFd)
+    if (max_fd < sIntGpioValueFd)
     {
-        max_fd = gIntGpioValueFd;
+        max_fd = sIntGpioValueFd;
     }
 
-    if (gIntGpioValueFd < 0)
+    if (sIntGpioValueFd < 0)
     {
         syslog(LOG_WARNING, "Interrupt pin was not set, must poll SPI. Performance will suffer.");
     }
@@ -1259,20 +1466,20 @@ int main(int argc, char *argv[])
     // ========================================================================
     // MAIN LOOP
 
-    while (gRet == 0)
+    while (sRet == 0)
     {
-        int timeout_ms = 60 * MSEC_PER_SEC;
+        int timeout_ms = MSEC_PER_SEC * 60 * 60 * 24; // 24 hours
 
         FD_ZERO(&read_set);
         FD_ZERO(&write_set);
         FD_ZERO(&error_set);
 
-        if (!gSpiTxReady)
+        if (!sSpiTxIsReady)
         {
-            FD_SET(gHDLCInputFd, &read_set);
+            FD_SET(sHdlcInputFd, &read_set);
 
         }
-        else if (gSpiTxFlowControl)
+        else if (sSpiTxFlowControl)
         {
             // We are being rate-limited by the NCP.
             timeout_ms = SPI_POLL_PERIOD_MSEC;
@@ -1285,12 +1492,12 @@ int main(int argc, char *argv[])
             timeout_ms = 0;
         }
 
-        if (gSpiRxPayloadSize != 0)
+        if (sSpiRxPayloadSize != 0)
         {
-            FD_SET(gHDLCOutputFd, &write_set);
+            FD_SET(sHdlcOutputFd, &write_set);
 
         }
-        else if (gIntGpioValueFd >= 0)
+        else if (sIntGpioValueFd >= 0)
         {
             if (check_and_clear_interrupt())
             {
@@ -1302,7 +1509,7 @@ int main(int argc, char *argv[])
             }
             else
             {
-                FD_SET(gIntGpioValueFd, &error_set);
+                FD_SET(sIntGpioValueFd, &error_set);
             }
 
         }
@@ -1319,34 +1526,34 @@ int main(int argc, char *argv[])
         i = select(max_fd + 1, &read_set, &write_set, &error_set, &timeout);
 
         // Handle serial input.
-        if (FD_ISSET(gHDLCInputFd, &read_set))
+        if (FD_ISSET(sHdlcInputFd, &read_set))
         {
             // Read in the data.
             if (pull_hdlc() < 0)
             {
-                gRet = EXIT_FAILURE;
+                sRet = EXIT_FAILURE;
                 break;
             }
         }
 
         // Handle serial output.
-        if (FD_ISSET(gHDLCOutputFd, &write_set))
+        if (FD_ISSET(sHdlcOutputFd, &write_set))
         {
             // Write out the data.
             if (push_hdlc() < 0)
             {
-                gRet = EXIT_FAILURE;
+                sRet = EXIT_FAILURE;
                 break;
             }
         }
 
         // Service the SPI port if we can receive
         // a packet or we have a packet to be sent.
-        if ((gSpiRxPayloadSize == 0) || gSpiTxReady)
+        if ((sSpiRxPayloadSize == 0) || sSpiTxIsReady)
         {
             if (push_pull_spi() < 0)
             {
-                gRet = EXIT_FAILURE;
+                sRet = EXIT_FAILURE;
             }
         }
     }
@@ -1356,16 +1563,16 @@ int main(int argc, char *argv[])
     // SHUTDOWN
 
 bail:
-    syslog(LOG_NOTICE, "Shutdown. (gRet = %d)", gRet);
+    syslog(LOG_NOTICE, "Shutdown. (sRet = %d)", sRet);
 
-    if (gRet == EXIT_QUIT)
+    if (sRet == EXIT_QUIT)
     {
-        gRet = EXIT_SUCCESS;
+        sRet = EXIT_SUCCESS;
     }
-    else if (gRet == -1)
+    else if (sRet == -1)
     {
-        gRet = EXIT_FAILURE;
+        sRet = EXIT_FAILURE;
     }
 
-    return gRet;
+    return sRet;
 }

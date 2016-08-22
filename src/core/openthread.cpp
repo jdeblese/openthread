@@ -60,6 +60,7 @@ extern "C" {
 static otDEFINE_ALIGNED_VAR(sThreadNetifRaw, sizeof(ThreadNetif), uint64_t);
 
 static void HandleActiveScanResult(void *aContext, Mac::Frame *aFrame);
+static void HandleMleDiscover(otActiveScanResult *aResult, void *aContext);
 
 void otProcessNextTasklet(void)
 {
@@ -94,6 +95,19 @@ void otSetChildTimeout(uint32_t aTimeout)
 const uint8_t *otGetExtendedAddress(void)
 {
     return reinterpret_cast<const uint8_t *>(sThreadNetif->GetMac().GetExtAddress());
+}
+
+ThreadError otSetExtendedAddress(const otExtAddress *aExtAddress)
+{
+    ThreadError error = kThreadError_None;
+
+    VerifyOrExit(aExtAddress != NULL, error = kThreadError_InvalidArgs);
+
+    SuccessOrExit(error = sThreadNetif->GetMac().SetExtAddress(*static_cast<const Mac::ExtAddress *>(aExtAddress)));
+    SuccessOrExit(error = sThreadNetif->GetMle().UpdateLinkLocalAddress());
+
+exit:
+    return error;
 }
 
 const uint8_t *otGetExtendedPanId(void)
@@ -281,14 +295,14 @@ ThreadError otAddBorderRouter(const otBorderRouterConfig *aConfig)
 {
     uint8_t flags = 0;
 
-    if (aConfig->mSlaacPreferred)
+    if (aConfig->mPreferred)
     {
         flags |= NetworkData::BorderRouterEntry::kPreferredFlag;
     }
 
-    if (aConfig->mSlaacValid)
+    if (aConfig->mSlaac)
     {
-        flags |= NetworkData::BorderRouterEntry::kValidFlag;
+        flags |= NetworkData::BorderRouterEntry::kSlaacFlag;
     }
 
     if (aConfig->mDhcp)
@@ -304,6 +318,11 @@ ThreadError otAddBorderRouter(const otBorderRouterConfig *aConfig)
     if (aConfig->mDefaultRoute)
     {
         flags |= NetworkData::BorderRouterEntry::kDefaultRouteFlag;
+    }
+
+    if (aConfig->mOnMesh)
+    {
+        flags |= NetworkData::BorderRouterEntry::kOnMeshFlag;
     }
 
     return sThreadNetif->GetNetworkDataLocal().AddOnMeshPrefix(aConfig->mPrefix.mPrefix.mFields.m8,
@@ -468,7 +487,7 @@ ThreadError otBecomeChild(otMleAttachFilter aFilter)
 
 ThreadError otBecomeRouter(void)
 {
-    return sThreadNetif->GetMle().BecomeRouter();
+    return sThreadNetif->GetMle().BecomeRouter(ThreadStatusTlv::kTooFewRouters);
 }
 
 ThreadError otBecomeLeader(void)
@@ -795,6 +814,19 @@ exit:
     return;
 }
 
+ThreadError otDiscover(uint32_t aScanChannels, uint16_t aScanDuration, uint16_t aPanId,
+                       otHandleActiveScanResult aCallback)
+{
+    return sThreadNetif->GetMle().Discover(aScanChannels, aScanDuration, aPanId, &HandleMleDiscover,
+                                           reinterpret_cast<void *>(aCallback));
+}
+
+void HandleMleDiscover(otActiveScanResult *aResult, void *aContext)
+{
+    otHandleActiveScanResult handler = reinterpret_cast<otHandleActiveScanResult>(aContext);
+    handler(aResult);
+}
+
 void otSetReceiveIp6DatagramCallback(otReceiveIp6DatagramCallback aCallback)
 {
     Ip6::Ip6::SetReceiveDatagramCallback(aCallback);
@@ -891,6 +923,54 @@ bool otIsIcmpEchoEnabled(void)
 void otSetIcmpEchoEnabled(bool aEnabled)
 {
     Ip6::Icmp::SetEchoEnabled(aEnabled);
+}
+
+ThreadError otGetActiveDataset(otOperationalDataset *aDataset)
+{
+    ThreadError error = kThreadError_None;
+
+    VerifyOrExit(aDataset != NULL, error = kThreadError_InvalidArgs);
+
+    sThreadNetif->GetActiveDataset().Get(*aDataset);
+
+exit:
+    return error;
+}
+
+ThreadError otSetActiveDataset(otOperationalDataset *aDataset)
+{
+    ThreadError error;
+
+    VerifyOrExit(aDataset != NULL, error = kThreadError_InvalidArgs);
+
+    error = sThreadNetif->GetActiveDataset().Set(*aDataset);
+
+exit:
+    return error;
+}
+
+ThreadError otGetPendingDataset(otOperationalDataset *aDataset)
+{
+    ThreadError error = kThreadError_None;
+
+    VerifyOrExit(aDataset != NULL, error = kThreadError_InvalidArgs);
+
+    sThreadNetif->GetPendingDataset().Get(*aDataset);
+
+exit:
+    return error;
+}
+
+ThreadError otSetPendingDataset(otOperationalDataset *aDataset)
+{
+    ThreadError error;
+
+    VerifyOrExit(aDataset != NULL, error = kThreadError_InvalidArgs);
+
+    error = sThreadNetif->GetPendingDataset().Set(*aDataset);
+
+exit:
+    return error;
 }
 
 #ifdef __cplusplus

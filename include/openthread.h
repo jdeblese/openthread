@@ -232,7 +232,7 @@ typedef void (*otHandleActiveScanResult)(otActiveScanResult *aResult);
  *
  * @param[in]  aScanChannels  A bit vector indicating which channels to scan (e.g. OT_CHANNEL_11_MASK).
  * @param[in]  aScanDuration  The time in milliseconds to spend scanning each channel.
- * @param[in]  aCallback      A pointer to a function that is called when a beacon is received or the scan completes.
+ * @param[in]  aCallback      A pointer to a function called on receiving a beacon or scan completes.
  *
  * @retval kThreadError_None  Accepted the Active Scan request.
  * @retval kThreadError_Busy  Already performing an Active Scan.
@@ -246,6 +246,28 @@ ThreadError otActiveScan(uint32_t aScanChannels, uint16_t aScanDuration, otHandl
  * @returns true if an active scan is in progress.
  */
 bool otActiveScanInProgress(void);
+
+/**
+ * This function starts a Thread Discovery scan.
+ *
+ * @param[in]  aScanChannels  A bit vector indicating which channels to scan (e.g. OT_CHANNEL_11_MASK).
+ * @param[in]  aScanDuration  The time in milliseconds to spend scanning each channel.
+ * @param[in]  aPanId         The PAN ID filter (set to Broadcast PAN to disable filter).
+ * @param[in]  aCallback      A pointer to a function called on receiving an MLE Discovery Response or scan completes.
+ *
+ * @retval kThreadError_None  Accepted the Thread Discovery request.
+ * @retval kThreadError_Busy  Already performing an Thread Discovery.
+ *
+ */
+ThreadError otDiscover(uint32_t aScanChannels, uint16_t aScanDuration, uint16_t aPanid,
+                       otHandleActiveScanResult aCallback);
+
+/**
+ * This function determines if an MLE Thread Discovery is currently in progress.
+ *
+ * @returns true if an active scan is in progress.
+ */
+bool otDiscoverInProgress(void);
 
 /**
  * @}
@@ -315,6 +337,17 @@ void otSetChildTimeout(uint32_t aTimeout);
  * @returns A pointer to the IEEE 802.15.4 Extended Address.
  */
 const uint8_t *otGetExtendedAddress(void);
+
+/**
+ * This function sets the IEEE 802.15.4 Extended Address.
+ *
+ * @param[in]  aExtendedAddress  A pointer to the IEEE 802.15.4 Extended Address.
+ *
+ * @retval kThreadError_None         Successfully set the IEEE 802.15.4 Extended Address.
+ * @retval kThreadError_InvalidArgs  @p aExtendedAddress was NULL.
+ *
+ */
+ThreadError otSetExtendedAddress(const otExtAddress *aExtendedAddress);
 
 /**
  * Get the IEEE 802.15.4 Extended PAN ID.
@@ -550,6 +583,52 @@ typedef void (*otStateChangedCallback)(uint32_t aFlags, void *aContext);
  *
  */
 void otSetStateChangedCallback(otStateChangedCallback aCallback, void *aContext);
+
+/**
+ * This function gets the Active Operational Dataset.
+ *
+ * @param[out]  aDataset  A pointer to where the Active Operational Dataset will be placed.
+ *
+ * @retval kThreadError_None         Successfully retrieved the Active Operational Dataset.
+ * @retval kThreadError_InvalidArgs  @p aDataset was NULL.
+ *
+ */
+ThreadError otGetActiveDataset(otOperationalDataset *aDataset);
+
+/**
+ * This function sets the Active Operational Dataset.
+ *
+ * @param[in]  aDataset  A pointer to the Active Operational Dataset.
+ *
+ * @retval kThreadError_None         Successfully set the Active Operational Dataset.
+ * @retval kThreadError_NoBufs       Insufficient buffer space to set the Active Operational Datset.
+ * @retval kThreadError_InvalidArgs  @p aDataset was NULL.
+ *
+ */
+ThreadError otSetActiveDataset(otOperationalDataset *aDataset);
+
+/**
+ * This function gets the Pending Operational Dataset.
+ *
+ * @param[out]  aDataset  A pointer to where the Pending Operational Dataset will be placed.
+ *
+ * @retval kThreadError_None         Successfully retrieved the Pending Operational Dataset.
+ * @retval kThreadError_InvalidArgs  @p aDataset was NULL.
+ *
+ */
+ThreadError otGetPendingDataset(otOperationalDataset *aDataset);
+
+/**
+ * This function sets the Pending Operational Dataset.
+ *
+ * @param[in]  aDataset  A pointer to the Pending Operational Dataset.
+ *
+ * @retval kThreadError_None         Successfully set the Pending Operational Dataset.
+ * @retval kThreadError_NoBufs       Insufficient buffer space to set the Pending Operational Datset.
+ * @retval kThreadError_InvalidArgs  @p aDataset was NULL.
+ *
+ */
+ThreadError otSetPendingDataset(otOperationalDataset *aDataset);
 
 /**
  * @}

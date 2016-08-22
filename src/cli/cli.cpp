@@ -39,7 +39,9 @@
 #include <openthread-config.h>
 
 #include "cli.hpp"
+#include "cli_dataset.hpp"
 #include <common/encoding.hpp>
+#include <common/new.hpp>
 #include <platform/uart.h>
 
 using Thread::Encoding::BigEndian::HostSwap16;
@@ -56,6 +58,8 @@ const struct Command Interpreter::sCommands[] =
     { "childtimeout", &ProcessChildTimeout },
     { "contextreusedelay", &ProcessContextIdReuseDelay },
     { "counter", &ProcessCounters },
+    { "dataset", &ProcessDataset },
+    { "discover", &ProcessDiscover },
     { "eidcache", &ProcessEidCache },
     { "extaddr", &ProcessExtAddress },
     { "extpanid", &ProcessExtPanId },
@@ -86,14 +90,27 @@ const struct Command Interpreter::sCommands[] =
 
 otNetifAddress Interpreter::sAddress;
 
-Ip6::IcmpEcho Interpreter::sIcmpEcho(&HandleEchoResponse, NULL);
+static otDEFINE_ALIGNED_VAR(sIcmpEchoBuf, sizeof(Ip6::IcmpEcho), uint64_t);
+Ip6::IcmpEcho *Interpreter::sIcmpEcho;
+
+static otDEFINE_ALIGNED_VAR(sPingTimerBuf, sizeof(Timer), uint64_t);
+Timer *Interpreter::sPingTimer;
+
 Ip6::SockAddr Interpreter::sSockAddr;
 Server *Interpreter::sServer;
 uint8_t Interpreter::sEchoRequest[1500];
-uint16_t Interpreter::sLength = 8;
-uint16_t Interpreter::sCount = 1;
-uint32_t Interpreter::sInterval = 1000;
-Timer Interpreter::sPingTimer(&HandlePingTimer, NULL);
+uint16_t Interpreter::sLength;
+uint16_t Interpreter::sCount;
+uint32_t Interpreter::sInterval;
+
+void Interpreter::Init(void)
+{
+    sIcmpEcho = new(&sIcmpEchoBuf) Ip6::IcmpEcho(&HandleEchoResponse, NULL);
+    sPingTimer = new(&sPingTimerBuf) Timer(&HandlePingTimer, NULL);
+    sLength = 8;
+    sCount = 1;
+    sInterval = 1000;
+}
 
 int Interpreter::Hex2Bin(const char *aHex, uint8_t *aBin, uint16_t aBinLength)
 {
@@ -353,6 +370,35 @@ void Interpreter::ProcessCounters(int argc, char *argv[])
     }
 }
 
+void Interpreter::ProcessDataset(int argc, char *argv[])
+{
+    ThreadError error;
+    error = Dataset::Process(argc, argv, *sServer);
+    AppendResult(error);
+}
+
+void Interpreter::ProcessDiscover(int argc, char *argv[])
+{
+    ThreadError error = kThreadError_None;
+    uint32_t scanChannels = 0;
+    long value;
+
+    if (argc > 0)
+    {
+        SuccessOrExit(error = ParseLong(argv[0], value));
+        scanChannels = 1 << value;
+    }
+
+    SuccessOrExit(error = otDiscover(scanChannels, 0, OT_PANID_BROADCAST, &HandleActiveScanResult));
+    sServer->OutputFormat("| J | Network Name     | Extended PAN     | PAN  | MAC Address      | Ch | dBm | LQI |\r\n");
+    sServer->OutputFormat("+---+------------------+------------------+------+------------------+----+-----+-----+\r\n");
+
+    return;
+
+exit:
+    AppendResult(error);
+}
+
 void Interpreter::ProcessEidCache(int argc, char *argv[])
 {
     otEidCacheEntry entry;
@@ -386,11 +432,24 @@ exit:
 
 void Interpreter::ProcessExtAddress(int argc, char *argv[])
 {
-    OutputBytes(otGetExtendedAddress(), OT_EXT_ADDRESS_SIZE);
-    sServer->OutputFormat("\r\n");
-    AppendResult(kThreadError_None);
-    (void)argc;
-    (void)argv;
+    ThreadError error = kThreadError_None;
+
+    if (argc == 0)
+    {
+        OutputBytes(otGetExtendedAddress(), OT_EXT_ADDRESS_SIZE);
+        sServer->OutputFormat("\r\n");
+    }
+    else
+    {
+        otExtAddress extAddress;
+
+        VerifyOrExit(Hex2Bin(argv[0], extAddress.m8, sizeof(otExtAddress)) >= 0, error = kThreadError_Parse);
+
+        otSetExtendedAddress(&extAddress);
+    }
+
+exit:
+    AppendResult(error);
 }
 
 void Interpreter::ProcessExtPanId(int argc, char *argv[])
@@ -417,7 +476,7 @@ exit:
 
 void Interpreter::ProcessIfconfig(int argc, char *argv[])
 {
-    ThreadError error = kThreadError_Parse;
+    ThreadError error = kThreadError_None;
 
     if (argc == 0)
     {
@@ -765,7 +824,7 @@ void Interpreter::ProcessPing(int argc, char *argv[])
     long value;
 
     VerifyOrExit(argc > 0, error = kThreadError_Parse);
-    VerifyOrExit(!sPingTimer.IsRunning(), error = kThreadError_Busy);
+    VerifyOrExit(!sPingTimer->IsRunning(), error = kThreadError_Busy);
 
     memset(&sSockAddr, 0, sizeof(sSockAddr));
     SuccessOrExit(error = sSockAddr.GetAddress().FromString(argv[0]));
@@ -814,12 +873,12 @@ void Interpreter::HandlePingTimer(void *aContext)
     uint32_t timestamp = HostSwap32(Timer::GetNow());
 
     memcpy(sEchoRequest, &timestamp, sizeof(timestamp));
-    sIcmpEcho.SendEchoRequest(sSockAddr, sEchoRequest, sLength);
+    sIcmpEcho->SendEchoRequest(sSockAddr, sEchoRequest, sLength);
     sCount--;
 
     if (sCount)
     {
-        sPingTimer.Start(sInterval);
+        sPingTimer->Start(sInterval);
     }
 
     (void)aContext;
@@ -852,43 +911,9 @@ ThreadError Interpreter::ProcessPrefixAdd(int argc, char *argv[])
         ExitNow(error = kThreadError_Parse);
     }
 
-    if (++argcur < argc)
-    {
-        for (char *arg = argv[argcur]; *arg != '\0'; arg++)
-        {
-            switch (*arg)
-            {
-            case 'p':
-                config.mSlaacPreferred = true;
-                break;
+    argcur++;
 
-            case 'v':
-                config.mSlaacValid = true;
-                break;
-
-            case 'd':
-                config.mDhcp = true;
-                break;
-
-            case 'c':
-                config.mConfigure = true;
-                break;
-
-            case 'r':
-                config.mDefaultRoute = true;
-                break;
-
-            case 's':
-                config.mStable = true;
-                break;
-
-            default:
-                ExitNow();
-            }
-        }
-    }
-
-    if (++argcur < argc)
+    for (; argcur < argc; argcur++)
     {
         if (strcmp(argv[argcur], "high") == 0)
         {
@@ -904,7 +929,42 @@ ThreadError Interpreter::ProcessPrefixAdd(int argc, char *argv[])
         }
         else
         {
-            ExitNow(error = kThreadError_Parse);
+            for (char *arg = argv[argcur]; *arg != '\0'; arg++)
+            {
+                switch (*arg)
+                {
+                case 'p':
+                    config.mPreferred = true;
+                    break;
+
+                case 'a':
+                    config.mSlaac = true;
+                    break;
+
+                case 'd':
+                    config.mDhcp = true;
+                    break;
+
+                case 'c':
+                    config.mConfigure = true;
+                    break;
+
+                case 'r':
+                    config.mDefaultRoute = true;
+                    break;
+
+                case 'o':
+                    config.mOnMesh = true;
+                    break;
+
+                case 's':
+                    config.mStable = true;
+                    break;
+
+                default:
+                    ExitNow(error = kThreadError_Parse);
+                }
+            }
         }
     }
 
@@ -1022,13 +1082,16 @@ ThreadError Interpreter::ProcessRouteAdd(int argc, char *argv[])
         ExitNow(error = kThreadError_Parse);
     }
 
-    if (++argcur < argc)
+    argcur++;
+
+    for (; argcur < argc; argcur++)
     {
         if (strcmp(argv[argcur], "s") == 0)
         {
             config.mStable = true;
         }
-        else if (strcmp(argv[argcur], "high") == 0)
+
+        if (strcmp(argv[argcur], "high") == 0)
         {
             config.mPreference = 1;
         }
@@ -1189,7 +1252,7 @@ exit:
 void Interpreter::ProcessScan(int argc, char *argv[])
 {
     ThreadError error = kThreadError_None;
-    uint16_t scanChannels = 0;
+    uint32_t scanChannels = 0;
     long value;
 
     if (argc > 0)
@@ -1229,7 +1292,9 @@ void Interpreter::HandleActiveScanResult(otActiveScanResult *aResult)
 
     if (aResult->mExtPanId != NULL)
     {
+        sServer->OutputFormat("| ");
         OutputBytes(aResult->mExtPanId, OT_EXT_PAN_ID_SIZE);
+        sServer->OutputFormat(" ");
     }
     else
     {
@@ -1237,9 +1302,8 @@ void Interpreter::HandleActiveScanResult(otActiveScanResult *aResult)
     }
 
     sServer->OutputFormat("| %04x | ", aResult->mPanId);
-
     OutputBytes(aResult->mExtAddress.m8, OT_EXT_ADDRESS_SIZE);
-    sServer->OutputFormat("| %2d ", aResult->mChannel);
+    sServer->OutputFormat(" | %2d ", aResult->mChannel);
     sServer->OutputFormat("| %3d ", aResult->mRssi);
     sServer->OutputFormat("| %3d |\r\n", aResult->mLqi);
 

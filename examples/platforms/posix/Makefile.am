@@ -38,12 +38,19 @@ libopenthread_posix_a_CPPFLAGS            = \
 
 libopenthread_posix_a_SOURCES             = \
     alarm.c                                 \
+    misc.c                                  \
     logging.c                               \
     platform.c                              \
     radio.c                                 \
     random.c                                \
     uart.c                                  \
     $(NULL)
+
+if OPENTHREAD_ENABLE_NCP_SPI
+libopenthread_posix_a_SOURCES           += \
+    spi-stubs.c                            \
+    $(NULL)
+endif
 
 noinst_HEADERS                            = \
     platform-posix.h                        \

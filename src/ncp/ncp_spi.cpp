@@ -38,6 +38,9 @@
 #include <core/openthread-core-config.h>
 
 #define SPI_RESET_FLAG          0x80
+#define SPI_CRC_FLAG            0x40
+#define SPI_PATTERN_VALUE       0x02
+#define SPI_PATTERN_MASK        0x03
 
 namespace Thread {
 
@@ -49,24 +52,34 @@ extern "C" void otNcpInit(void)
     sNcpSpi = new(&sNcpRaw) NcpSpi;
 }
 
+static void spi_header_set_flag_byte(uint8_t *header, uint8_t value)
+{
+    header[0] = value;
+}
+
 static void spi_header_set_accept_len(uint8_t *header, uint16_t len)
 {
-    header[1] = ((len << 0) & 0xFF);
-    header[2] = ((len << 8) & 0xFF);
+    header[1] = ((len >> 0) & 0xFF);
+    header[2] = ((len >> 8) & 0xFF);
 }
 
 static void spi_header_set_data_len(uint8_t *header, uint16_t len)
 {
-    header[3] = ((len << 0) & 0xFF);
-    header[4] = ((len << 8) & 0xFF);
+    header[3] = ((len >> 0) & 0xFF);
+    header[4] = ((len >> 8) & 0xFF);
 }
 
-static uint16_t spi_header_get_accept_len(uint8_t *header)
+static uint8_t spi_header_get_flag_byte(const uint8_t *header)
+{
+    return header[0];
+}
+
+static uint16_t spi_header_get_accept_len(const uint8_t *header)
 {
     return ( header[1] + (header[2] << 8) );
 }
 
-static uint16_t spi_header_get_data_len(uint8_t *header)
+static uint16_t spi_header_get_data_len(const uint8_t *header)
 {
     return ( header[3] + (header[4] << 8) );
 }
@@ -79,7 +92,10 @@ NcpSpi::NcpSpi():
     memset(mEmptySendFrame, 0, sizeof(SPI_HEADER_LENGTH));
     memset(mSendFrame, 0, sizeof(SPI_HEADER_LENGTH));
 
-    mEmptySendFrame[0] = mSendFrame[0] = SPI_RESET_FLAG;
+    mSending = false;
+
+    spi_header_set_flag_byte(mSendFrame, SPI_RESET_FLAG|SPI_PATTERN_VALUE);
+    spi_header_set_flag_byte(mEmptySendFrame, SPI_RESET_FLAG|SPI_PATTERN_VALUE);
     spi_header_set_accept_len(mSendFrame, sizeof(mReceiveFrame) - SPI_HEADER_LENGTH);
     otPlatSpiSlaveEnable(&SpiTransactionComplete, (void*)this);
 
@@ -130,6 +146,10 @@ NcpSpi::SpiTransactionComplete(
     uint16_t tx_data_len(0);
     uint16_t tx_accept_len(0);
 
+    // TODO: Check `PATTERN` bits of `HDR` and ignore frame if not set.
+    //       Holding off on implementing this so as to not cause immediate
+    //       compatability problems, even though it is required by the spec.
+
     if (aTransactionLength >= SPI_HEADER_LENGTH)
     {
         if (aMISOBufLen >= SPI_HEADER_LENGTH)
@@ -168,9 +188,9 @@ NcpSpi::SpiTransactionComplete(
     if ( (aTransactionLength >= 1)
       && (aMISOBufLen >= 1)
     ) {
-        // Clear the reset flag
-        mSendFrame[0] &= ~SPI_RESET_FLAG;
-        mEmptySendFrame[0] &= ~SPI_RESET_FLAG;
+        // Clear the reset flag.
+        spi_header_set_flag_byte(mSendFrame, SPI_PATTERN_VALUE);
+        spi_header_set_flag_byte(mEmptySendFrame, SPI_PATTERN_VALUE);
     }
 
     if (mSending && !mHandlingSendDone)
@@ -316,7 +336,7 @@ void NcpSpi::HandleSendDone(void)
     mSending = false;
     mHandlingSendDone = false;
 
-    super_t::HandleSendDone();
+    super_t::HandleSpaceAvailableInTxBuffer();
 }
 
 void NcpSpi::HandleRxFrame(void *context)
