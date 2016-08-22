@@ -146,6 +146,14 @@ extern void otSignalTaskletPending(void);
  */
 
 /**
+ * Get the OpenThread version string.
+ *
+ * @returns A pointer to the OpenThread version.
+ *
+ */
+const char *otGetVersionString(void);
+
+/**
  * This function initializes the OpenThread library.
  *
  * This function initializes OpenThread and prepares it for subsequent OpenThread API calls.  This function must be
@@ -842,7 +850,7 @@ uint32_t otGetNetworkIdTimeout(void);
  *
  * @sa otGetNetworkIdTimeout
  */
-void otSetNetworkIdTimeout(uint32_t aTimeout);
+void otSetNetworkIdTimeout(uint8_t aTimeout);
 
 /**
  * Get the ROUTER_UPGRADE_THRESHOLD parameter used in the REED role.

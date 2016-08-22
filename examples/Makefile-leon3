@@ -45,6 +45,7 @@ configure_OPTIONS               = \
     --enable-cli                  \
     --enable-ncp                  \
     --with-examples=leon3         \
+    --with-platform-info=LEON3    \
     $(NULL)
 
 COMMONCFLAGS                   := \
