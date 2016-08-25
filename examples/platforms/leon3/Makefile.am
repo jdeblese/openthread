@@ -43,6 +43,7 @@ libopenthread_leon3_a_SOURCES             = \
     radio-stub.c                            \
     random.c                                \
     uart.c                                  \
+    spi.c                                   \
     $(NULL)
 
 noinst_HEADERS                            = \
