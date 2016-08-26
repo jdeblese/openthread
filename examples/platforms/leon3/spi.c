@@ -73,17 +73,15 @@ void leon3SpiSetBaud(uint32_t hz) {
 
     mode &= ~(0xf<<16);
 
-    /*
     if (hz > (kSystemClock>>6)) {
         div = kSystemClock / hz;
         div = (div>>2) + ((div>>1) & 1);  // divide by 4 w/ simple rounding
         mode &= ~(1<<27);  // div16
     } else {
-    */
         div = kSystemClock / hz;
         div = (div>>6) + ((div>>5) & 1);  // divide by 64 w/ simple rounding
         mode |= 1<<27;  // div16
-    //}
+    }
     div--;
 
     if (div > 0xf)
