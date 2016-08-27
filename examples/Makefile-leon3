@@ -44,6 +44,7 @@ BuildJobs                      ?= 99
 configure_OPTIONS               = \
     --enable-cli                  \
     --enable-ncp                  \
+    --enable-diag                 \
     --with-examples=leon3         \
     --with-platform-info=LEON3    \
     $(NULL)

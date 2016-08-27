@@ -46,6 +46,12 @@ libopenthread_leon3_a_SOURCES             = \
     spi.c                                   \
     $(NULL)
 
+if OPENTHREAD_ENABLE_DIAG
+libopenthread_leon3_a_SOURCES            += \
+    diag.c                                  \
+    $(NULL)
+endif
+
 noinst_HEADERS                            = \
     platform-leon3.h                        \
     $(NULL)

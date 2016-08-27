@@ -35,7 +35,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include <openthread-config.h>
 #include <platform/alarm.h>
+#include <platform/diag.h>
 #include "platform-leon3.h"
 
 enum
@@ -114,7 +116,17 @@ void leon3AlarmProcess(void)
         if (fire)
         {
             s_is_running = false;
-            otPlatAlarmFired();
+#if OPENTHREAD_ENABLE_DIAG
+
+            if (otPlatDiagModeGet())
+            {
+                otPlatDiagAlarmFired();
+            }
+            else
+#endif
+            {
+                otPlatAlarmFired();
+            }
         }
     }
 
