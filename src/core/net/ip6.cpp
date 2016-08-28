@@ -49,6 +49,7 @@ namespace Ip6 {
 
 static otDEFINE_ALIGNED_VAR(sMplBuf, sizeof(Mpl), uint64_t);
 static Mpl *sMpl;
+static bool sForwardingEnabled;
 
 static otReceiveIp6DatagramCallback sReceiveIp6DatagramCallback = NULL;
 
@@ -63,6 +64,12 @@ Message *Ip6::NewMessage(uint16_t reserved)
 void Ip6::Init(void)
 {
     sMpl = new(&sMplBuf) Mpl;
+    sForwardingEnabled = false;
+}
+
+void Ip6::SetForwardingEnabled(bool aEnable)
+{
+    sForwardingEnabled = aEnable;
 }
 
 uint16_t Ip6::UpdateChecksum(uint16_t checksum, uint16_t val)
@@ -181,7 +188,7 @@ exit:
 
     if (error == kThreadError_None)
     {
-        error = HandleDatagram(message, NULL, messageInfo.mInterfaceId, NULL, false);
+        HandleDatagram(message, NULL, messageInfo.mInterfaceId, NULL, false);
     }
 
     return error;
@@ -320,10 +327,9 @@ void Ip6::ProcessReceiveCallback(Message &aMessage)
     VerifyOrExit(sReceiveIp6DatagramCallback != NULL, ;);
 
     // make a copy of the datagram to pass to host
-    VerifyOrExit((messageCopy = NewMessage(0)) != NULL, ;);
+    VerifyOrExit((messageCopy = NewMessage(0)) != NULL, error = kThreadError_NoBufs);
     SuccessOrExit(error = messageCopy->SetLength(aMessage.GetLength()));
-    VerifyOrExit(aMessage.CopyTo(0, 0, aMessage.GetLength(), *messageCopy) == aMessage.GetLength(),
-                 error = kThreadError_Drop);
+    aMessage.CopyTo(0, 0, aMessage.GetLength(), *messageCopy);
 
     sReceiveIp6DatagramCallback(messageCopy);
 
@@ -338,7 +344,7 @@ exit:
 ThreadError Ip6::HandleDatagram(Message &message, Netif *netif, int8_t interfaceId, const void *linkMessageInfo,
                                 bool fromLocalHost)
 {
-    ThreadError error = kThreadError_Drop;
+    ThreadError error = kThreadError_None;
     MessageInfo messageInfo;
     Header header;
     uint16_t payloadLength;
@@ -354,16 +360,16 @@ ThreadError Ip6::HandleDatagram(Message &message, Netif *netif, int8_t interface
 #endif
 
     // check message length
-    VerifyOrExit(message.GetLength() >= sizeof(header), ;);
+    VerifyOrExit(message.GetLength() >= sizeof(header), error = kThreadError_Drop);
     message.Read(0, sizeof(header), &header);
     payloadLength = header.GetPayloadLength();
 
     // check Version
-    VerifyOrExit(header.IsVersion6(), ;);
+    VerifyOrExit(header.IsVersion6(), error = kThreadError_Drop);
 
     // check Payload Length
     VerifyOrExit(sizeof(header) + payloadLength == message.GetLength() &&
-                 sizeof(header) + payloadLength <= Ip6::kMaxDatagramLength, ;);
+                 sizeof(header) + payloadLength <= Ip6::kMaxDatagramLength, error = kThreadError_Drop);
 
     memset(&messageInfo, 0, sizeof(messageInfo));
     messageInfo.GetPeerAddr() = header.GetSource();
@@ -405,11 +411,16 @@ ThreadError Ip6::HandleDatagram(Message &message, Netif *netif, int8_t interface
         }
     }
 
+    if (!sForwardingEnabled && netif != NULL)
+    {
+        forward = false;
+    }
+
     message.SetOffset(sizeof(header));
 
     // process IPv6 Extension Headers
     nextHeader = header.GetNextHeader();
-    SuccessOrExit(HandleExtensionHeaders(message, nextHeader, receive));
+    SuccessOrExit(error = HandleExtensionHeaders(message, nextHeader, receive));
 
     // process IPv6 Payload
     if (receive)
@@ -419,7 +430,7 @@ ThreadError Ip6::HandleDatagram(Message &message, Netif *netif, int8_t interface
             ProcessReceiveCallback(message);
         }
 
-        SuccessOrExit(HandlePayload(message, messageInfo, nextHeader));
+        SuccessOrExit(error = HandlePayload(message, messageInfo, nextHeader));
     }
 
     if (forward)
@@ -432,24 +443,24 @@ ThreadError Ip6::HandleDatagram(Message &message, Netif *netif, int8_t interface
         if (header.GetHopLimit() == 0)
         {
             // send time exceeded
+            ExitNow(error = kThreadError_Drop);
         }
         else
         {
             hopLimit = header.GetHopLimit();
             message.Write(Header::GetHopLimitOffset(), Header::GetHopLimitSize(), &hopLimit);
-            SuccessOrExit(ForwardMessage(message, messageInfo));
-            ExitNow(error = kThreadError_None);
+            SuccessOrExit(error = ForwardMessage(message, messageInfo));
         }
     }
 
 exit:
 
-    if (error == kThreadError_Drop)
+    if (error != kThreadError_None || !forward)
     {
         Message::Free(message);
     }
 
-    return kThreadError_None;
+    return error;
 }
 
 ThreadError ForwardMessage(Message &message, MessageInfo &messageInfo)

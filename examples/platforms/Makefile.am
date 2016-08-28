@@ -50,10 +50,6 @@ if OPENTHREAD_EXAMPLES_LEON3
 SUBDIRS                                 = leon3
 endif
 
-noinst_HEADERS                          = \
-    platform.h                            \
-    $(NULL)
-
 # Always pretty (e.g. for 'make pretty') these subdirectories.
 
 PRETTY_SUBDIRS                          = \

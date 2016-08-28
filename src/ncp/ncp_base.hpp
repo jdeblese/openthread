@@ -102,6 +102,12 @@ protected:
      */
     virtual ThreadError OutboundFrameSend(void) = 0;
 
+    /**
+     * This method is called by the framer whenever a framing error
+     * is detected.
+     */
+    void IncrementFrameErrorCounter(void);
+
 protected:
 
     /**
@@ -256,8 +262,8 @@ private:
     ThreadError GetPropertyHandler_MAC_15_4_PANID(uint8_t header, spinel_prop_key_t key);
     ThreadError GetPropertyHandler_MAC_15_4_LADDR(uint8_t header, spinel_prop_key_t key);
     ThreadError GetPropertyHandler_MAC_15_4_SADDR(uint8_t header, spinel_prop_key_t key);
-    ThreadError GetPropertyHandler_NET_ENABLED(uint8_t header, spinel_prop_key_t key);
-    ThreadError GetPropertyHandler_NET_STATE(uint8_t header, spinel_prop_key_t key);
+    ThreadError GetPropertyHandler_NET_IF_UP(uint8_t header, spinel_prop_key_t key);
+    ThreadError GetPropertyHandler_NET_STACK_UP(uint8_t header, spinel_prop_key_t key);
     ThreadError GetPropertyHandler_NET_ROLE(uint8_t header, spinel_prop_key_t key);
     ThreadError GetPropertyHandler_NET_NETWORK_NAME(uint8_t header, spinel_prop_key_t key);
     ThreadError GetPropertyHandler_NET_XPANID(uint8_t header, spinel_prop_key_t key);
@@ -293,6 +299,7 @@ private:
     ThreadError GetPropertyHandler_THREAD_RLOC16(uint8_t header, spinel_prop_key_t key);
     ThreadError GetPropertyHandler_THREAD_ROUTER_UPGRADE_THRESHOLD(uint8_t header, spinel_prop_key_t key);
     ThreadError GetPropertyHandler_THREAD_CONTEXT_REUSE_DELAY(uint8_t header, spinel_prop_key_t key);
+    ThreadError GetPropertyHandler_THREAD_NETWORK_ID_TIMEOUT(uint8_t header, spinel_prop_key_t key);
 
     ThreadError SetPropertyHandler_POWER_STATE(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr,
                                                uint16_t value_len);
@@ -306,9 +313,9 @@ private:
                                                   uint16_t value_len);
     ThreadError SetPropertyHandler_MAC_15_4_PANID(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr,
                                                   uint16_t value_len);
-    ThreadError SetPropertyHandler_NET_ENABLED(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr,
+    ThreadError SetPropertyHandler_NET_IF_UP(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr,
                                                uint16_t value_len);
-    ThreadError SetPropertyHandler_NET_STATE(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr,
+    ThreadError SetPropertyHandler_NET_STACK_UP(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr,
                                              uint16_t value_len);
     ThreadError SetPropertyHandler_NET_ROLE(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr,
                                             uint16_t value_len);
@@ -341,6 +348,7 @@ private:
     ThreadError SetPropertyHandler_THREAD_CHILD_TIMEOUT(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr, uint16_t value_len);
     ThreadError SetPropertyHandler_THREAD_ROUTER_UPGRADE_THRESHOLD(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr, uint16_t value_len);
     ThreadError SetPropertyHandler_THREAD_CONTEXT_REUSE_DELAY(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr, uint16_t value_len);
+    ThreadError SetPropertyHandler_THREAD_NETWORK_ID_TIMEOUT(uint8_t header, spinel_prop_key_t key, const uint8_t *value_ptr, uint16_t value_len);
 
 
     ThreadError SetPropertyHandler_THREAD_ASSISTING_PORTS(uint8_t header, spinel_prop_key_t key,
@@ -391,6 +399,8 @@ private:
 
     uint32_t mChangedFlags;
 
+    bool mShouldSignalEndOfScan;
+
     spinel_tid_t mDroppedReplyTid;
 
     uint16_t mDroppedReplyTidBitSet;
@@ -398,6 +408,8 @@ private:
     otNetifAddress mNetifAddresses[kNetifAddressListSize];
 
     bool mAllowLocalNetworkDataChange;
+
+    uint32_t mFramingErrorCounter;
 };
 
 }  // namespace Thread
