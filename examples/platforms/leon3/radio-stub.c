@@ -237,7 +237,7 @@ ThreadError otPlatRadioTransmit(void)
     return error;
 }
 
-int8_t otPlatRadioGetNoiseFloor(void)
+int8_t otPlatRadioGetRssi(void)
 {
     return 0;
 }
