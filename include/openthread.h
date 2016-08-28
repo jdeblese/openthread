@@ -239,52 +239,91 @@ bool otIsSingleton(void);
  * This function pointer is called during an IEEE 802.15.4 Active Scan when an IEEE 802.15.4 Beacon is received or
  * the scan completes.
  *
- * @param[in]  aResult  A valid pointer to the beacon information or NULL when the active scan completes.
+ * @param[in]  aResult   A valid pointer to the beacon information or NULL when the active scan completes.
+ * @param[in]  aContext  A pointer to application-specific context.
  *
  */
-typedef void (*otHandleActiveScanResult)(otActiveScanResult *aResult);
+typedef void (*otHandleActiveScanResult)(otActiveScanResult *aResult, void *aContext);
 
 /**
  * This function starts an IEEE 802.15.4 Active Scan
  *
- * @param[in]  aScanChannels  A bit vector indicating which channels to scan (e.g. OT_CHANNEL_11_MASK).
- * @param[in]  aScanDuration  The time in milliseconds to spend scanning each channel.
- * @param[in]  aCallback      A pointer to a function called on receiving a beacon or scan completes.
+ * @param[in]  aScanChannels    A bit vector indicating which channels to scan (e.g. OT_CHANNEL_11_MASK).
+ * @param[in]  aScanDuration     The time in milliseconds to spend scanning each channel.
+ * @param[in]  aCallback         A pointer to a function called on receiving a beacon or scan completes.
+ * @param[in]  aCallbackContext  A pointer to application-specific context.
  *
  * @retval kThreadError_None  Accepted the Active Scan request.
  * @retval kThreadError_Busy  Already performing an Active Scan.
  *
  */
-ThreadError otActiveScan(uint32_t aScanChannels, uint16_t aScanDuration, otHandleActiveScanResult aCallback);
+ThreadError otActiveScan(uint32_t aScanChannels, uint16_t aScanDuration, otHandleActiveScanResult aCallback,
+                         void *aCallbackContext);
 
 /**
- * This function determines if an IEEE 802.15.4 Active Scan is currently in progress.
+ * This function indicates whether or not an IEEE 802.15.4 Active Scan is currently in progress.
  *
- * @returns true if an active scan is in progress.
+ * @returns true if an IEEE 802.15.4 Active Scan is in progress, false otherwise.
+ *
  */
-bool otActiveScanInProgress(void);
+bool otIsActiveScanInProgress(void);
+
+/**
+ * This function pointer is called during an IEEE 802.15.4 Energy Scan when the result for a channel is ready or the
+ * scan completes.
+ *
+ * @param[in]  aResult   A valid pointer to the energy scan result information or NULL when the energy scan completes.
+ * @param[in]  aContext  A pointer to application-specific context.
+ *
+ */
+typedef void (*otHandleEnergyScanResult)(otEnergyScanResult *aResult, void *aContext);
+
+/**
+ * This function starts an IEEE 802.15.4 Energy Scan
+ *
+ * @param[in]  aScanChannels     A bit vector indicating on which channels to perform energy scan.
+ * @param[in]  aScanDuration     The time in milliseconds to spend scanning each channel.
+ * @param[in]  aCallback         A pointer to a function called to pass on scan result on indicate scan completion.
+ * @param[in]  aCallbackContext  A pointer to application-specific context.
+ *
+ * @retval kThreadError_None  Accepted the Energy Scan request.
+ * @retval kThreadError_Busy  Already performing an Active Scan.
+ *
+ */
+ThreadError otEnergyScan(uint32_t aScanChannels, uint16_t aScanDuration, otHandleEnergyScanResult aCallback,
+                         void *aCallbackContext);
+
+/**
+ * This function indicates whether or not an IEEE 802.15.4 Energy Scan is currently in progress.
+ *
+ * @returns true if an IEEE 802.15.4 Energy Scan is in progress, false otherwise.
+ *
+ */
+bool otIsEnergyScanInProgress(void);
 
 /**
  * This function starts a Thread Discovery scan.
  *
- * @param[in]  aScanChannels  A bit vector indicating which channels to scan (e.g. OT_CHANNEL_11_MASK).
- * @param[in]  aScanDuration  The time in milliseconds to spend scanning each channel.
- * @param[in]  aPanId         The PAN ID filter (set to Broadcast PAN to disable filter).
- * @param[in]  aCallback      A pointer to a function called on receiving an MLE Discovery Response or scan completes.
+ * @param[in]  aScanChannels     A bit vector indicating which channels to scan (e.g. OT_CHANNEL_11_MASK).
+ * @param[in]  aScanDuration     The time in milliseconds to spend scanning each channel.
+ * @param[in]  aPanId            The PAN ID filter (set to Broadcast PAN to disable filter).
+ * @param[in]  aCallback         A pointer to a function called on receiving an MLE Discovery Response or scan completes.
+ * @param[in]  aCallbackContext  A pointer to application-specific context.
  *
  * @retval kThreadError_None  Accepted the Thread Discovery request.
  * @retval kThreadError_Busy  Already performing an Thread Discovery.
  *
  */
 ThreadError otDiscover(uint32_t aScanChannels, uint16_t aScanDuration, uint16_t aPanid,
-                       otHandleActiveScanResult aCallback);
+                       otHandleActiveScanResult aCallback, void *aCallbackContext);
 
 /**
- * This function determines if an MLE Thread Discovery is currently in progress.
+ * This function indicates whether or not an MLE Thread Discovery is currently in progress.
  *
- * @returns true if an active scan is in progress.
+ * @returns true if an MLE Thread Discovery is in progress, false otherwise.
+ *
  */
-bool otDiscoverInProgress(void);
+bool otIsDiscoverInProgress(void);
 
 /**
  * @}
@@ -331,6 +370,26 @@ uint8_t otGetChannel(void);
  * @sa otGetChannel
  */
 ThreadError otSetChannel(uint8_t aChannel);
+
+/**
+ * Get the maximum number of children currently allowed.
+ *
+ * @returns The maximum number of children currently allowed.
+ *
+ * @sa otSetMaxAllowedChildren
+ */
+uint8_t otGetMaxAllowedChildren(void);
+
+/**
+ * Set the maximum number of children currently allowed.
+ *
+ * @retval  kThreadErrorNone           Successfully set the max.
+ * @retval  kThreadError_InvalidArgs   If @p aMaxChildren is not in the range [1, OPENTHREAD_CONFIG_MAX_CHILDREN].
+ * @retval  kThreadError_InvalidState  If Thread has already been started.
+ *
+ * @sa otGetMaxAllowedChildren
+ */
+ThreadError otSetMaxAllowedChildren(uint8_t aMaxChildren);
 
 /**
  * Get the Thread Child Timeout used when operating in the Child role.
@@ -1363,19 +1422,21 @@ uint8_t otGetStableNetworkDataVersion(void);
  * @note This callback is called before IEEE 802.15.4 security processing and mSecurityValid in @p aFrame will
  * always be false.
  *
- * @param[in]  aFrame  A pointer to the received IEEE 802.15.4 frame.
+ * @param[in]  aFrame    A pointer to the received IEEE 802.15.4 frame.
+ * @param[in]  aContext  A pointer to application-specific context.
  *
  */
-typedef void (*otLinkPcapCallback)(const RadioPacket *aFrame);
+typedef void (*otLinkPcapCallback)(const RadioPacket *aFrame, void *aContext);
 
 /**
  * This function registers a callback to provide received raw IEEE 802.15.4 frames.
  *
- * @param[in]  aPcapCallback  A pointer to a function that is called when receiving an IEEE 802.15.4 link frame or
- *                            NULL to disable the callback.
+ * @param[in]  aPcapCallback     A pointer to a function that is called when receiving an IEEE 802.15.4 link frame or
+ *                               NULL to disable the callback.
+ * @param[in]  aCallbackContext  A pointer to application-specific context.
  *
  */
-void otSetLinkPcapCallback(otLinkPcapCallback aPcapCallback);
+void otSetLinkPcapCallback(otLinkPcapCallback aPcapCallback, void *aCallbackContext);
 
 /**
  * This function indicates whether or not promiscuous mode is enabled at the link layer.
@@ -1619,18 +1680,51 @@ int otWriteMessage(otMessage aMessage, uint16_t aOffset, const void *aBuf, uint1
  * This function pointer is called when an IPv6 datagram is received.
  *
  * @param[in]  aMessage  A pointer to the message buffer containing the received IPv6 datagram.
+ * @param[in]  aContext  A pointer to application-specific context.
  *
  */
-typedef void (*otReceiveIp6DatagramCallback)(otMessage aMessage);
+typedef void (*otReceiveIp6DatagramCallback)(otMessage aMessage, void *aContext);
 
 /**
  * This function registers a callback to provide received IPv6 datagrams.
  *
- * @param[in]  aCallback  A pointer to a function that is called when an IPv6 datagram is received or NULL to disable
- *                        the callback.
+ * By default, this callback does not pass Thread control traffic.  See otSetReceiveIp6FilterEnabled() to change
+ * the Thread control traffic filter setting.
+ *
+ * @param[in]  aCallback         A pointer to a function that is called when an IPv6 datagram is received
+ *                               or NULL to disable the callback.
+ * @param[in]  aCallbackContext  A pointer to application-specific context.
+ *
+ * @sa otIsReceiveIp6FilterEnabled
+ * @sa otSetReceiveIp6FilterEnabled
  *
  */
-void otSetReceiveIp6DatagramCallback(otReceiveIp6DatagramCallback aCallback);
+void otSetReceiveIp6DatagramCallback(otReceiveIp6DatagramCallback aCallback, void *aCallbackContext);
+
+
+/**
+ * This function indicates whether or not Thread control traffic is filtered out when delivering IPv6 datagrams
+ * via the callback specified in otSetReceiveIp6DatagramCallback().
+ *
+ * @returns  TRUE if Thread control traffic is filtered out, FALSE otherwise.
+ *
+ * @sa otSetReceiveDatagramCallback
+ * @sa otSetReceiveIp6FilterEnabled
+ *
+ */
+bool otIsReceiveIp6DatagramFilterEnabled(void);
+
+/**
+ * This function sets whether or not Thread control traffic is filtered out when delivering IPv6 datagrams
+ * via the callback specified in otSetReceiveIp6DatagramCallback().
+ *
+ * @param[in]  aEnabled  TRUE if Thread control traffic is filtered out, FALSE otherwise.
+ *
+ * @sa otSetReceiveDatagramCallback
+ * @sa otIsReceiveIp6FilterEnabled
+ *
+ */
+void otSetReceiveIp6DatagramFilterEnabled(bool aEnabled);
 
 /**
  * This function sends an IPv6 datagram via the Thread interface.
@@ -1656,6 +1750,17 @@ bool otIsIcmpEchoEnabled(void);
  *
  */
 void otSetIcmpEchoEnabled(bool aEnabled);
+
+/**
+ * This function returns the prefix match length (bits) for two IPv6 addresses.
+ *
+ * @param[in]  aFirst   A pointer to the first IPv6 address.
+ * @param[in]  aSecond  A pointer to the second IPv6 address.
+ *
+ * @returns  The prefix match length in bits.
+ *
+ */
+uint8_t otIp6PrefixMatch(const otIp6Address *aFirst, const otIp6Address *aSecond);
 
 /**
  * @}

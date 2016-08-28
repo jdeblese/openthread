@@ -1,7 +1,7 @@
 Spinel Host Controller Interface
 ================================
 
-Updated: 2016-08-17
+Updated: 2016-08-22
 
 Written by: Robert Quattlebaum <rquattle@nestlabs.com>
 
@@ -1616,6 +1616,14 @@ Used when operating in the Child role.
 Allows you to get or set the Thread `NETWORK_ID_TIMEOUT` constant, as
 defined by the Thread specification.
 
+#### D.4.21. PROP 5381: `PROP_THREAD_ACTIVE_ROUTER_IDS`
+* Type: Read-Write/Write-Only
+* Packed-Encoding: `A(C)` (List of active thread router ids)
+
+Note that some implementations may not support `CMD_GET_VALUE`
+routerids, but may support `CMD_REMOVE_VALUE` when the node is
+a leader.
+
 ### D.5. IPv6 Properties
 
 #### D.5.1. PROP 96: `PROP_IPV6_LL_ADDR`
@@ -1659,3 +1667,11 @@ Array of structures containing:
 * `C`: Interface ID
 * `C`: Flags
 
+#### D.5.6. PROP 101: `PROP_IPv6_ICMP_PING_OFFLOAD`
+* Type: Read-Write
+* Packed-Encoding: `b`
+
+Allow the NCP to directly respond to ICMP ping requests. If this is
+turned on, ping request ICMP packets will not be passed to the host.
+
+Default value is `false`.

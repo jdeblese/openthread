@@ -65,6 +65,15 @@ static otDEFINE_ALIGNED_VAR(sThreadNetifRaw, sizeof(ThreadNetif), uint64_t);
 static void HandleActiveScanResult(void *aContext, Mac::Frame *aFrame);
 static void HandleMleDiscover(otActiveScanResult *aResult, void *aContext);
 
+static otHandleActiveScanResult sActiveScanCallback = NULL;
+static void *sActiveScanCallbackContext = NULL;
+
+static otHandleEnergyScanResult sEnergyScanCallback = NULL;
+static void *sEnergyScanCallbackContext = NULL;
+
+static otHandleActiveScanResult sDiscoverCallback = NULL;
+static void *sDiscoverCallbackContext = NULL;
+
 void otProcessNextTasklet(void)
 {
     TaskletScheduler::RunNextTasklet();
@@ -83,6 +92,20 @@ uint8_t otGetChannel(void)
 ThreadError otSetChannel(uint8_t aChannel)
 {
     return sThreadNetif->GetMac().SetChannel(aChannel);
+}
+
+uint8_t otGetMaxAllowedChildren(void)
+{
+    uint8_t aNumChildren;
+
+    (void)sThreadNetif->GetMle().GetChildren(&aNumChildren);
+
+    return aNumChildren;
+}
+
+ThreadError otSetMaxAllowedChildren(uint8_t aMaxChildren)
+{
+    return sThreadNetif->GetMle().SetMaxAllowedChildren(aMaxChildren);
 }
 
 uint32_t otGetChildTimeout(void)
@@ -401,9 +424,7 @@ ThreadError otRemoveExternalRoute(const otIp6Prefix *aPrefix)
 
 ThreadError otSendServerData(void)
 {
-    Ip6::Address destination;
-    sThreadNetif->GetMle().GetLeaderAddress(destination);
-    return sThreadNetif->GetNetworkDataLocal().Register(destination);
+    return sThreadNetif->GetNetworkDataLocal().SendServerDataNotification();
 }
 
 ThreadError otAddUnsecurePort(uint16_t aPort)
@@ -759,9 +780,9 @@ uint8_t otGetStableNetworkDataVersion(void)
     return sThreadNetif->GetMle().GetLeaderDataTlv().GetStableDataVersion();
 }
 
-void otSetLinkPcapCallback(otLinkPcapCallback aPcapCallback)
+void otSetLinkPcapCallback(otLinkPcapCallback aPcapCallback, void *aCallbackContext)
 {
-    sThreadNetif->GetMac().SetPcapCallback(aPcapCallback);
+    sThreadNetif->GetMac().SetPcapCallback(aPcapCallback, aCallbackContext);
 }
 
 bool otIsLinkPromiscuous(void)
@@ -929,20 +950,21 @@ bool otIsSingleton(void)
     return mEnabled && sThreadNetif->GetMle().IsSingleton();
 }
 
-ThreadError otActiveScan(uint32_t aScanChannels, uint16_t aScanDuration, otHandleActiveScanResult aCallback)
+ThreadError otActiveScan(uint32_t aScanChannels, uint16_t aScanDuration, otHandleActiveScanResult aCallback,
+                         void *aCallbackContext)
 {
-    return sThreadNetif->GetMac().ActiveScan(aScanChannels, aScanDuration, &HandleActiveScanResult,
-                                             reinterpret_cast<void *>(aCallback));
+    sActiveScanCallback = aCallback;
+    sActiveScanCallbackContext = aCallbackContext;
+    return sThreadNetif->GetMac().ActiveScan(aScanChannels, aScanDuration, &HandleActiveScanResult, NULL);
 }
 
-bool otActiveScanInProgress(void)
+bool otIsActiveScanInProgress(void)
 {
     return sThreadNetif->GetMac().IsActiveScanInProgress();
 }
 
 void HandleActiveScanResult(void *aContext, Mac::Frame *aFrame)
 {
-    otHandleActiveScanResult handler = reinterpret_cast<otHandleActiveScanResult>(aContext);
     otActiveScanResult result;
     Mac::Address address;
     Mac::Beacon *beacon;
@@ -952,7 +974,7 @@ void HandleActiveScanResult(void *aContext, Mac::Frame *aFrame)
 
     if (aFrame == NULL)
     {
-        handler(NULL);
+        sActiveScanCallback(NULL, sActiveScanCallbackContext);
         ExitNow();
     }
 
@@ -977,28 +999,64 @@ void HandleActiveScanResult(void *aContext, Mac::Frame *aFrame)
         memcpy(&result.mExtendedPanId, beacon->GetExtendedPanId(), sizeof(result.mExtendedPanId));
     }
 
-    handler(&result);
+    sActiveScanCallback(&result, sActiveScanCallbackContext);
 
 exit:
+    (void)aContext;
     return;
 }
 
-ThreadError otDiscover(uint32_t aScanChannels, uint16_t aScanDuration, uint16_t aPanId,
-                       otHandleActiveScanResult aCallback)
+ThreadError otEnergyScan(uint32_t aScanChannels, uint16_t aScanDuration, otHandleEnergyScanResult aCallback,
+                         void *aCallbackContext)
 {
-    return sThreadNetif->GetMle().Discover(aScanChannels, aScanDuration, aPanId, &HandleMleDiscover,
-                                           reinterpret_cast<void *>(aCallback));
+    sEnergyScanCallback = aCallback;
+    sEnergyScanCallbackContext = aCallbackContext;
+
+    (void)aScanChannels;
+    (void)aScanDuration;
+
+    // TODO: Implement the energy scan at mac layer.
+
+    return kThreadError_NotImplemented;
+}
+
+bool otIsEnegyScanInProgress(void)
+{
+    return false;
+}
+
+ThreadError otDiscover(uint32_t aScanChannels, uint16_t aScanDuration, uint16_t aPanId,
+                       otHandleActiveScanResult aCallback, void *aCallbackContext)
+{
+    sDiscoverCallback = aCallback;
+    sDiscoverCallbackContext = aCallbackContext;
+    return sThreadNetif->GetMle().Discover(aScanChannels, aScanDuration, aPanId, &HandleMleDiscover, NULL);
+}
+
+bool otIsDiscoverInProgress(void)
+{
+    return sThreadNetif->GetMle().IsDiscoverInProgress();
 }
 
 void HandleMleDiscover(otActiveScanResult *aResult, void *aContext)
 {
-    otHandleActiveScanResult handler = reinterpret_cast<otHandleActiveScanResult>(aContext);
-    handler(aResult);
+    (void)aContext;
+    sDiscoverCallback(aResult, sDiscoverCallbackContext);
 }
 
-void otSetReceiveIp6DatagramCallback(otReceiveIp6DatagramCallback aCallback)
+void otSetReceiveIp6DatagramCallback(otReceiveIp6DatagramCallback aCallback, void *aCallbackContext)
 {
-    Ip6::Ip6::SetReceiveDatagramCallback(aCallback);
+    Ip6::Ip6::SetReceiveDatagramCallback(aCallback, aCallbackContext);
+}
+
+bool otGetReceiveIp6DatagramFilterEnabled(void)
+{
+    return Ip6::Ip6::IsReceiveIp6FilterEnabled();
+}
+
+void otSetReceiveIp6DatagramFilterEnabled(bool aEnabled)
+{
+    Ip6::Ip6::SetReceiveIp6FilterEnabled(aEnabled);
 }
 
 ThreadError otSendIp6Datagram(otMessage aMessage)
@@ -1092,6 +1150,18 @@ bool otIsIcmpEchoEnabled(void)
 void otSetIcmpEchoEnabled(bool aEnabled)
 {
     Ip6::Icmp::SetEchoEnabled(aEnabled);
+}
+
+uint8_t otIp6PrefixMatch(const otIp6Address *aFirst, const otIp6Address *aSecond)
+{
+    uint8_t rval;
+
+    VerifyOrExit(aFirst != NULL && aSecond != NULL, rval = 0);
+
+    rval = static_cast<const Ip6::Address *>(aFirst)->PrefixMatch(*static_cast<const Ip6::Address *>(aSecond));
+
+exit:
+    return rval;
 }
 
 ThreadError otGetActiveDataset(otOperationalDataset *aDataset)

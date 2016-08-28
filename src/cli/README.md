@@ -10,6 +10,7 @@ OpenThread test scripts use the CLI to execute test cases.
 * [channel](#channel)
 * [blacklist](#blacklist)
 * [child](#child)
+* [childmax](#childmax)
 * [childtimeout](#childtimeout)
 * [contextreusedelay](#contextreusedelay)
 * [counter](#counter)
@@ -33,11 +34,13 @@ OpenThread test scripts use the CLI to execute test cases.
 * [ping](#ping)
 * [pollperiod](#pollperiod)
 * [prefix](#prefix)
+* [promiscuous](#promiscuous)
 * [releaserouterid](#releaserouterid)
 * [reset](#reset)
 * [rloc16](#rloc16)
 * [route](#route)
 * [router](#router)
+* [routerrole](#routerrole)
 * [routerupgradethreshold](#routerupgradethreshold)
 * [scan](#scan)
 * [singleton](#singleton)
@@ -149,6 +152,25 @@ Timeout: 100
 Age: 0
 LQI: 3
 RSSI: -20
+Done
+```
+
+### childmax
+
+Get the Thread maximum number of allowed children.
+
+```bash
+> childmax
+5
+Done
+```
+
+### childmax \<count\>
+
+Set the Thread maximum number of allowed children.
+
+```bash
+> childmax 2
 Done
 ```
 
@@ -612,6 +634,34 @@ Invalidate a prefix in the Network Data.
 Done
 ```
 
+### promiscuous
+
+Get radio promiscuous property.
+
+```bash
+> promiscuous
+Disabled
+Done
+```
+
+### promiscuous enable
+
+Enable radio promiscuous operation and print raw packet content.
+
+```bash
+> promiscuous enable
+Done
+```
+
+### promiscuous disable
+
+Disable radio promiscuous operation.
+
+```bash
+> promiscuous disable
+Done
+```
+
 ### releaserouterid \<routerid\>
 Release a Router ID that has been allocated by the device in the Leader role.
 
@@ -699,6 +749,34 @@ Cost: 0
 LQI In: 3
 LQI Out: 3
 Age: 7
+Done
+```
+
+### routerrole
+
+Indicates whether the router role is enabled or disabled.
+
+```bash
+> routerrole
+Enabled
+Done
+```
+
+### routerrole enable
+
+Enable the router role.
+
+```bash
+> routerrole enable
+Done
+```
+
+### routerrole disable
+
+Disable the router role.
+
+```bash
+> routerrole disable
 Done
 ```
 

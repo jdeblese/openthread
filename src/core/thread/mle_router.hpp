@@ -246,6 +246,27 @@ public:
     ThreadError ReleaseRouterId(uint8_t aRouterId);
 
     /**
+     * This method removes a link to a neighbor.
+     *
+     * @param[in]  aAddress  The link address of the neighbor.
+     *
+     * @retval kThreadError_None      Successfully removed the neighbor.
+     * @retval kThreadError_NotFound  Could not find the neighbor.
+     *
+     */
+    ThreadError RemoveNeighbor(const Mac::Address &aAddress);
+
+    /**
+     * This method removes a link to a neighbor.
+     *
+     * @param[in]  aNeighbor  A reference to the neighbor object.
+     *
+     * @retval kThreadError_None      Successfully removed the neighbor.
+     *
+     */
+    ThreadError RemoveNeighbor(Neighbor &aNeighbor);
+
+    /**
      * This method returns a pointer to a Child object.
      *
      * @param[in]  aAddress  The address of the Child.
@@ -294,6 +315,18 @@ public:
      *
      */
     Child *GetChildren(uint8_t *aNumChildren);
+
+    /**
+     * This method sets the max children allowed value for this Thread interface.
+     *
+     * @param[in]  aMaxChildren  The max children allowed value.
+     *
+     * @retval  kThreadErrorNone           Successfully set the max.
+     * @retval  kThreadError_InvalidArgs   If @p aMaxChildren is not in the range [1, kMaxChildren].
+     * @retval  kThreadError_InvalidState  If MLE has already been started.
+     *
+     */
+    ThreadError SetMaxAllowedChildren(uint8_t aMaxChildren);
 
     /**
      * This method returns a pointer to a Neighbor object.
@@ -507,6 +540,7 @@ private:
     uint8_t mRouterIdSequence;
     uint32_t mRouterIdSequenceLastUpdated;
     Router mRouters[kMaxRouterId];
+    uint8_t mMaxChildrenAllowed;
     Child mChildren[kMaxChildren];
 
     uint8_t mChallenge[8];

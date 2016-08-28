@@ -43,6 +43,7 @@
 #include <net/ip6_routes.hpp>
 #include <net/netif.hpp>
 #include <net/udp6.hpp>
+#include <thread/mle.hpp>
 
 namespace Thread {
 namespace Ip6 {
@@ -52,6 +53,8 @@ static Mpl *sMpl;
 static bool sForwardingEnabled;
 
 static otReceiveIp6DatagramCallback sReceiveIp6DatagramCallback = NULL;
+static void *sReceiveIp6DatagramCallbackContext = NULL;
+static bool sIsReceiveIp6FilterEnabled;
 
 static ThreadError ForwardMessage(Message &message, MessageInfo &messageInfo);
 
@@ -65,6 +68,7 @@ void Ip6::Init(void)
 {
     sMpl = new(&sMplBuf) Mpl;
     sForwardingEnabled = false;
+    sIsReceiveIp6FilterEnabled = true;
 }
 
 void Ip6::SetForwardingEnabled(bool aEnable)
@@ -107,9 +111,20 @@ uint16_t Ip6::ComputePseudoheaderChecksum(const Address &src, const Address &dst
     return checksum;
 }
 
-void Ip6::SetReceiveDatagramCallback(otReceiveIp6DatagramCallback aCallback)
+void Ip6::SetReceiveDatagramCallback(otReceiveIp6DatagramCallback aCallback, void *aCallbackContext)
 {
     sReceiveIp6DatagramCallback = aCallback;
+    sReceiveIp6DatagramCallbackContext = aCallbackContext;
+}
+
+bool Ip6::IsReceiveIp6FilterEnabled(void)
+{
+    return sIsReceiveIp6FilterEnabled;
+}
+
+void Ip6::SetReceiveIp6FilterEnabled(bool aEnabled)
+{
+    sIsReceiveIp6FilterEnabled = aEnabled;
 }
 
 ThreadError AddMplOption(Message &message, Header &header, IpProto nextHeader, uint16_t payloadLength)
@@ -319,19 +334,56 @@ exit:
     return error;
 }
 
-void Ip6::ProcessReceiveCallback(Message &aMessage)
+void Ip6::ProcessReceiveCallback(const Message &aMessage, const MessageInfo &messageInfo, uint8_t aIpProto)
 {
     ThreadError error = kThreadError_None;
     Message *messageCopy = NULL;
 
     VerifyOrExit(sReceiveIp6DatagramCallback != NULL, ;);
 
+    if (sIsReceiveIp6FilterEnabled)
+    {
+        // do not pass messages sent to/from an RLOC
+        VerifyOrExit(!messageInfo.GetSockAddr().IsRoutingLocator() &&
+                     !messageInfo.GetPeerAddr().IsRoutingLocator(), ;);
+
+        switch (aIpProto)
+        {
+        case kProtoIcmp6:
+            if (Icmp::IsEchoEnabled())
+            {
+                IcmpHeader icmp;
+                aMessage.Read(aMessage.GetOffset(), sizeof(icmp), &icmp);
+
+                // do not pass ICMP Echo Request messages
+                VerifyOrExit(icmp.GetType() != IcmpHeader::kTypeEchoRequest, ;);
+            }
+
+            break;
+
+        case kProtoUdp:
+            if (messageInfo.GetSockAddr().IsLinkLocal())
+            {
+                UdpHeader udp;
+                aMessage.Read(aMessage.GetOffset(), sizeof(udp), &udp);
+
+                // do not pass MLE messages
+                VerifyOrExit(udp.GetDestinationPort() != Mle::kUdpPort, ;);
+            }
+
+            break;
+
+        default:
+            break;
+        }
+    }
+
     // make a copy of the datagram to pass to host
     VerifyOrExit((messageCopy = NewMessage(0)) != NULL, error = kThreadError_NoBufs);
     SuccessOrExit(error = messageCopy->SetLength(aMessage.GetLength()));
     aMessage.CopyTo(0, 0, aMessage.GetLength(), *messageCopy);
 
-    sReceiveIp6DatagramCallback(messageCopy);
+    sReceiveIp6DatagramCallback(messageCopy, sReceiveIp6DatagramCallbackContext);
 
 exit:
 
@@ -427,7 +479,7 @@ ThreadError Ip6::HandleDatagram(Message &message, Netif *netif, int8_t interface
     {
         if (fromLocalHost == false)
         {
-            ProcessReceiveCallback(message);
+            ProcessReceiveCallback(message, messageInfo, nextHeader);
         }
 
         SuccessOrExit(error = HandlePayload(message, messageInfo, nextHeader));

@@ -134,6 +134,7 @@ private:
     static void ProcessChannel(int argc, char *argv[]);
     static void ProcessChild(int argc, char *argv[]);
     static void ProcessChildTimeout(int argc, char *argv[]);
+    static void ProcessChildMax(int argc, char *argv[]);
     static void ProcessContextIdReuseDelay(int argc, char *argv[]);
     static void ProcessCounters(int argc, char *argv[]);
     static void ProcessDataset(int argc, char *argv[]);
@@ -163,10 +164,12 @@ private:
     static ThreadError ProcessPrefixAdd(int argc, char *argv[]);
     static ThreadError ProcessPrefixRemove(int argc, char *argv[]);
     static ThreadError ProcessPrefixList(void);
+    static void ProcessPromiscuous(int argc, char *argv[]);
     static void ProcessReleaseRouterId(int argc, char *argv[]);
     static void ProcessReset(int argc, char *argv[]);
     static void ProcessRoute(int argc, char *argv[]);
     static void ProcessRouter(int argc, char *argv[]);
+    static void ProcessRouterRole(int argc, char *argv[]);
     static ThreadError ProcessRouteAdd(int argc, char *argv[]);
     static ThreadError ProcessRouteRemove(int argc, char *argv[]);
     static void ProcessRouterUpgradeThreshold(int argc, char *argv[]);
@@ -184,7 +187,9 @@ private:
 
     static void HandleEchoResponse(void *aContext, Message &aMessage, const Ip6::MessageInfo &aMessageInfo);
     static void HandlePingTimer(void *aContext);
-    static void HandleActiveScanResult(otActiveScanResult *aResult);
+    static void HandleActiveScanResult(otActiveScanResult *aResult, void *aContext);
+    static void HandleNetifStateChanged(uint32_t aFlags, void *aContext);
+    static void HandleLinkPcapReceive(const RadioPacket *aFrame, void *aContext);
 
     static const struct Command sCommands[];
     static otNetifAddress sAddress;

@@ -42,6 +42,7 @@
 #include "cli_dataset.hpp"
 #include <common/encoding.hpp>
 #include <common/new.hpp>
+#include <platform/random.h>
 #include <platform/uart.h>
 
 using Thread::Encoding::BigEndian::HostSwap16;
@@ -56,6 +57,7 @@ const struct Command Interpreter::sCommands[] =
     { "blacklist", &ProcessBlacklist },
     { "channel", &ProcessChannel },
     { "child", &ProcessChild },
+    { "childmax", &ProcessChildMax },
     { "childtimeout", &ProcessChildTimeout },
     { "contextreusedelay", &ProcessContextIdReuseDelay },
     { "counter", &ProcessCounters },
@@ -80,12 +82,14 @@ const struct Command Interpreter::sCommands[] =
     { "parent", &ProcessParent },
     { "ping", &ProcessPing },
     { "pollperiod", &ProcessPollPeriod },
+    { "promiscuous", &ProcessPromiscuous },
     { "prefix", &ProcessPrefix },
     { "releaserouterid", &ProcessReleaseRouterId },
     { "reset", &ProcessReset },
     { "rloc16", &ProcessRloc16 },
     { "route", &ProcessRoute },
     { "router", &ProcessRouter },
+    { "routerrole", &ProcessRouterRole },
     { "routerupgradethreshold", &ProcessRouterUpgradeThreshold },
     { "scan", &ProcessScan },
     { "singleton", &ProcessSingleton },
@@ -113,6 +117,8 @@ uint16_t Interpreter::sLength;
 uint16_t Interpreter::sCount;
 uint32_t Interpreter::sInterval;
 
+static otNetifAddress sAutoAddresses[8];
+
 void Interpreter::Init(void)
 {
     sIcmpEcho = new(&sIcmpEchoBuf) Ip6::IcmpEcho(&HandleEchoResponse, NULL);
@@ -120,6 +126,7 @@ void Interpreter::Init(void)
     sLength = 8;
     sCount = 1;
     sInterval = 1000;
+    otSetStateChangedCallback(&HandleNetifStateChanged, NULL);
 }
 
 int Interpreter::Hex2Bin(const char *aHex, uint8_t *aBin, uint16_t aBinLength)
@@ -328,7 +335,7 @@ void Interpreter::ProcessChild(int argc, char *argv[])
     }
 
     SuccessOrExit(error = ParseLong(argv[0], value));
-    SuccessOrExit(error = otGetChildInfoById(static_cast<uint8_t>(value), &childInfo));
+    SuccessOrExit(error = otGetChildInfoById(static_cast<uint16_t>(value), &childInfo));
 
     sServer->OutputFormat("Child ID: %d\r\n", childInfo.mChildId);
     sServer->OutputFormat("Rloc: %04x\r\n", childInfo.mRloc16);
@@ -369,6 +376,25 @@ void Interpreter::ProcessChild(int argc, char *argv[])
     sServer->OutputFormat("Age: %d\r\n", childInfo.mAge);
     sServer->OutputFormat("LQI: %d\r\n", childInfo.mLinkQualityIn);
     sServer->OutputFormat("RSSI: %d\r\n", childInfo.mAverageRssi);
+
+exit:
+    AppendResult(error);
+}
+
+void Interpreter::ProcessChildMax(int argc, char *argv[])
+{
+    ThreadError error = kThreadError_None;
+    long value;
+
+    if (argc == 0)
+    {
+        sServer->OutputFormat("%d\r\n", otGetMaxAllowedChildren());
+    }
+    else
+    {
+        SuccessOrExit(error = ParseLong(argv[0], value));
+        SuccessOrExit(error = otSetMaxAllowedChildren(static_cast<uint8_t>(value)));
+    }
 
 exit:
     AppendResult(error);
@@ -472,7 +498,7 @@ void Interpreter::ProcessDiscover(int argc, char *argv[])
         scanChannels = 1 << value;
     }
 
-    SuccessOrExit(error = otDiscover(scanChannels, 0, OT_PANID_BROADCAST, &HandleActiveScanResult));
+    SuccessOrExit(error = otDiscover(scanChannels, 0, OT_PANID_BROADCAST, &HandleActiveScanResult, NULL));
     sServer->OutputFormat("| J | Network Name     | Extended PAN     | PAN  | MAC Address      | Ch | dBm | LQI |\r\n");
     sServer->OutputFormat("+---+------------------+------------------+------+------------------+----+-----+-----+\r\n");
 
@@ -1053,6 +1079,107 @@ exit:
     AppendResult(error);
 }
 
+void Interpreter::ProcessPromiscuous(int argc, char *argv[])
+{
+    ThreadError error = kThreadError_None;
+
+    if (argc == 0)
+    {
+        if (otIsLinkPromiscuous() && otPlatRadioGetPromiscuous())
+        {
+            sServer->OutputFormat("Enabled\r\n");
+        }
+        else
+        {
+            sServer->OutputFormat("Disabled\r\n");
+        }
+    }
+    else
+    {
+        if (strcmp(argv[0], "enable") == 0)
+        {
+            otSetLinkPcapCallback(&HandleLinkPcapReceive, NULL);
+            SuccessOrExit(error = otSetLinkPromiscuous(true));
+        }
+        else if (strcmp(argv[0], "disable") == 0)
+        {
+            otSetLinkPcapCallback(NULL, NULL);
+            SuccessOrExit(error = otSetLinkPromiscuous(false));
+        }
+    }
+
+exit:
+    AppendResult(error);
+}
+
+void Interpreter::HandleLinkPcapReceive(const RadioPacket *aFrame, void *aContext)
+{
+    sServer->OutputFormat("\r\n");
+
+    for (size_t i = 0; i < 44; i++)
+    {
+        sServer->OutputFormat("=");
+    }
+
+    sServer->OutputFormat("[len = %3u]", aFrame->mLength);
+
+    for (size_t i = 0; i < 28; i++)
+    {
+        sServer->OutputFormat("=");
+    }
+
+    sServer->OutputFormat("\r\n");
+
+    for (size_t i = 0; i < aFrame->mLength; i += 16)
+    {
+        sServer->OutputFormat("|");
+
+        for (size_t j = 0; j < 16; j++)
+        {
+            if (i + j < aFrame->mLength)
+            {
+                sServer->OutputFormat(" %02X", aFrame->mPsdu[i + j]);
+            }
+            else
+            {
+                sServer->OutputFormat(" ..");
+            }
+        }
+
+        sServer->OutputFormat("|");
+
+        for (size_t j = 0; j < 16; j++)
+        {
+            if (i + j < aFrame->mLength)
+            {
+                if (31 < aFrame->mPsdu[i + j] && aFrame->mPsdu[i + j] < 127)
+                {
+                    sServer->OutputFormat(" %c", aFrame->mPsdu[i + j]);
+                }
+                else
+                {
+                    sServer->OutputFormat(" ?");
+                }
+            }
+            else
+            {
+                sServer->OutputFormat(" .");
+            }
+        }
+
+        sServer->OutputFormat("|\r\n");
+    }
+
+    for (size_t i = 0; i < 83; i++)
+    {
+        sServer->OutputFormat("-");
+    }
+
+    sServer->OutputFormat("\r\n");
+
+    (void) aContext;
+}
+
 ThreadError Interpreter::ProcessPrefixAdd(int argc, char *argv[])
 {
     ThreadError error = kThreadError_None;
@@ -1443,7 +1570,7 @@ void Interpreter::ProcessRouter(int argc, char *argv[])
     }
 
     SuccessOrExit(error = ParseLong(argv[0], value));
-    SuccessOrExit(error = otGetRouterInfo(static_cast<uint8_t>(value), &routerInfo));
+    SuccessOrExit(error = otGetRouterInfo(static_cast<uint16_t>(value), &routerInfo));
 
     sServer->OutputFormat("Alloc: %d\r\n", routerInfo.mAllocated);
 
@@ -1469,6 +1596,38 @@ void Interpreter::ProcessRouter(int argc, char *argv[])
             sServer->OutputFormat("LQI Out: %d\r\n", routerInfo.mLinkQualityOut);
             sServer->OutputFormat("Age: %d\r\n", routerInfo.mAge);
         }
+    }
+
+exit:
+    AppendResult(error);
+}
+
+void Interpreter::ProcessRouterRole(int argc, char *argv[])
+{
+    ThreadError error = kThreadError_None;
+
+    if (argc == 0)
+    {
+        if (otIsRouterRoleEnabled())
+        {
+            sServer->OutputFormat("Enabled\r\n");
+        }
+        else
+        {
+            sServer->OutputFormat("Disabled\r\n");
+        }
+    }
+    else if (strcmp(argv[0], "enable") == 0)
+    {
+        otSetRouterRoleEnabled(true);
+    }
+    else if (strcmp(argv[0], "disable") == 0)
+    {
+        otSetRouterRoleEnabled(false);
+    }
+    else
+    {
+        ExitNow(error = kThreadError_Parse);
     }
 
 exit:
@@ -1506,7 +1665,7 @@ void Interpreter::ProcessScan(int argc, char *argv[])
         scanChannels = 1 << value;
     }
 
-    SuccessOrExit(error = otActiveScan(scanChannels, 0, &HandleActiveScanResult));
+    SuccessOrExit(error = otActiveScan(scanChannels, 0, &HandleActiveScanResult, NULL));
     sServer->OutputFormat("| J | Network Name     | Extended PAN     | PAN  | MAC Address      | Ch | dBm | LQI |\r\n");
     sServer->OutputFormat("+---+------------------+------------------+------+------------------+----+-----+-----+\r\n");
 
@@ -1516,7 +1675,7 @@ exit:
     AppendResult(error);
 }
 
-void Interpreter::HandleActiveScanResult(otActiveScanResult *aResult)
+void Interpreter::HandleActiveScanResult(otActiveScanResult *aResult, void *aContext)
 {
     if (aResult == NULL)
     {
@@ -1539,6 +1698,7 @@ void Interpreter::HandleActiveScanResult(otActiveScanResult *aResult)
     sServer->OutputFormat("| %3d |\r\n", aResult->mLqi);
 
 exit:
+    (void)aContext;
     return;
 }
 
@@ -1749,6 +1909,9 @@ void Interpreter::ProcessLine(char *aBuf, uint16_t aBufLength, Server &aServer)
 
     for (cmd = aBuf + 1; (cmd < aBuf + aBufLength) && (cmd != NULL); ++cmd)
     {
+        VerifyOrExit(argc < kMaxArgs,
+                     sServer->OutputFormat("Error: too many args (max %d)\r\n", kMaxArgs));
+
         if (*cmd == ' ' || *cmd == '\r' || *cmd == '\n')
         {
             *cmd = '\0';
@@ -1777,6 +1940,110 @@ void Interpreter::ProcessLine(char *aBuf, uint16_t aBufLength, Server &aServer)
     }
 
 exit:
+    return;
+}
+
+void Interpreter::HandleNetifStateChanged(uint32_t aFlags, void *aContext)
+{
+    otNetworkDataIterator iterator;
+    otBorderRouterConfig config;
+
+    VerifyOrExit((aFlags & OT_THREAD_NETDATA_UPDATED) != 0, ;);
+
+    // remove addresses
+    for (size_t i = 0; i < sizeof(sAutoAddresses) / sizeof(sAutoAddresses[0]); i++)
+    {
+        otNetifAddress *address = &sAutoAddresses[i];
+        bool found = false;
+
+        if (address->mValidLifetime == 0)
+        {
+            continue;
+        }
+
+        iterator = OT_NETWORK_DATA_ITERATOR_INIT;
+
+        while (otGetNextOnMeshPrefix(false, &iterator, &config) == kThreadError_None)
+        {
+            if (config.mSlaac == false)
+            {
+                continue;
+            }
+
+            if (otIp6PrefixMatch(&config.mPrefix.mPrefix, &address->mAddress) >= config.mPrefix.mLength &&
+                config.mPrefix.mLength == address->mPrefixLength)
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            otRemoveUnicastAddress(address);
+            address->mValidLifetime = 0;
+        }
+    }
+
+    // add addresses
+    iterator = OT_NETWORK_DATA_ITERATOR_INIT;
+
+    while (otGetNextOnMeshPrefix(false, &iterator, &config) == kThreadError_None)
+    {
+        bool found = false;
+
+        if (config.mSlaac == false)
+        {
+            continue;
+        }
+
+        for (size_t i = 0; i < sizeof(sAutoAddresses) / sizeof(sAutoAddresses[0]); i++)
+        {
+            otNetifAddress *address = &sAutoAddresses[i];
+
+            if (address->mValidLifetime == 0)
+            {
+                continue;
+            }
+
+            if (otIp6PrefixMatch(&config.mPrefix.mPrefix, &address->mAddress) >= config.mPrefix.mLength &&
+                config.mPrefix.mLength == address->mPrefixLength)
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+        {
+            for (size_t i = 0; i < sizeof(sAutoAddresses) / sizeof(sAutoAddresses[0]); i++)
+            {
+                otNetifAddress *address = &sAutoAddresses[i];
+
+                if (address->mValidLifetime != 0)
+                {
+                    continue;
+                }
+
+                memset(address, 0, sizeof(*address));
+                memcpy(&address->mAddress, &config.mPrefix.mPrefix, 8);
+
+                for (size_t j = 8; j < sizeof(address->mAddress); j++)
+                {
+                    address->mAddress.mFields.m8[j] = (uint8_t)otPlatRandomGet();
+                }
+
+                address->mPrefixLength = config.mPrefix.mLength;
+                address->mPreferredLifetime = config.mPreferred ? 0xffffffff : 0;
+                address->mValidLifetime = 0xffffffff;
+                otAddUnicastAddress(address);
+                break;
+            }
+        }
+    }
+
+exit:
+    (void)aContext;
     return;
 }
 
