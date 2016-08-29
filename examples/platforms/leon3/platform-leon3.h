@@ -52,6 +52,15 @@ enum
 extern void amba_init(void);
 extern unsigned long amba_find_apbslv_addr(unsigned long vendor, unsigned long device, unsigned long *irq);
 
+void UARTIntHandler(int irq);
+void mrfIntHandler(int irq);
+
+/**
+ * This function initializes interrupts
+ *
+ */
+void  leon3IntInit(void);
+
 /**
  * This function initializes the alarm service used by OpenThread.
  *

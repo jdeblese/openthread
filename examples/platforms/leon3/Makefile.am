@@ -45,6 +45,7 @@ libopenthread_leon3_a_SOURCES             = \
     uart.c                                  \
     diag.c                                  \
     spi.c                                   \
+    irq.c                                   \
     $(NULL)
 
 if OPENTHREAD_ENABLE_DIAG

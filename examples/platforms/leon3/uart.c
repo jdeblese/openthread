@@ -35,7 +35,6 @@
 #include <stddef.h>
 
 #include <asm-leon/lambapp_devs.h>
-#include <asm-leon/irq.h>
 
 #include <common/code_utils.hpp>
 #include <openthread-types.h>
@@ -51,8 +50,6 @@
 #define APBUART_CTRL_RXEN      0x1
 
 //extern void *catch_interrupt(void func(), int irq);
-
-void UARTIntHandler(int irq);
 
 static void processReceive(void);
 static void processTransmit(void);
@@ -83,10 +80,6 @@ ThreadError otPlatUartEnable(void)
     // enable rx interrupts
     // enable uart
     sUartRegs->control |= APBUART_CTRL_RINTEN | APBUART_CTRL_TXEN | APBUART_CTRL_RXEN;
-
-    // Enable UART IRQs
-    catch_interrupt((int)&UARTIntHandler, kUARTIRQ);
-    leon3EnableIrq(kUARTIRQ);
 
     return kThreadError_None;
 }

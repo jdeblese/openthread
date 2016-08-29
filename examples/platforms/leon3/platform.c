@@ -46,6 +46,7 @@ void PlatformInit(int argc, char *argv[])
     leon3AlarmInit();
     leon3RadioInit();
     leon3RandomInit();
+    leon3IntInit();
     otPlatUartEnable();
 
     (void)argc;
