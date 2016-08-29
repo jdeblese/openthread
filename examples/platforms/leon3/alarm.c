@@ -40,11 +40,6 @@
 #include <platform/diag.h>
 #include "platform-leon3.h"
 
-enum
-{
-    kTicksPerSec = 1000,      ///< Alarm ticks per second
-};
-
 static uint32_t s_alarm_t0 = 0;
 static uint32_t s_alarm_dt = 0;
 static bool s_is_running = false;
@@ -69,6 +64,10 @@ void leon3AlarmInit(void)
 {
     s_timer_regs = (struct timer_regs *)amba_find_apbslv_addr(VENDOR_GAISLER, GAISLER_GPTIMER, 0);
     s_timer_units = &(s_timer_regs->t1);
+
+    s_timer_regs->reload = ((uint32_t)kSystemClock / (uint32_t)kTicksPerSec);  // Scaler reset value
+    s_timer_regs->cfg |= 1<<16;  // Enable timer 0
+    s_timer_regs->t1.reload = 0xFFFFFFFF;
 }
 
 uint32_t otPlatAlarmGetNow(void)

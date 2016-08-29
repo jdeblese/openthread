@@ -46,6 +46,7 @@ enum
     kBaudRate = 115200,
     kReceiveBufferSize = 128,
     kUARTIRQ = 2,
+    kTicksPerSec = 1000,      ///< Alarm ticks per second
 };
 
 extern void amba_init(void);

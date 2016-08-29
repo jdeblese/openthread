@@ -44,8 +44,18 @@ void otPlatDiagProcess(int argc, char *argv[], char *aOutput, size_t aOutputMaxL
 {
     // add more plarform specific diagnostics features here
 
-    snprintf(aOutput, aOutputMaxLen, "diag feature '%s' is not supported\r\n", argv[0]);
+    if (strcmp(argv[0], "alarm") == 0)
+    {
+        uint32_t t = otPlatAlarmGetNow();
+        sprintf(aOutput, "alarm time is %lu (%lu.%03lu seconds)\r\n", t, t / kTicksPerSec, t%kTicksPerSec);
+    }
+    else
+    {
+        sprintf(aOutput, "diag feature '%s' is not supported\r\n", argv[0]);
+    }
+
     (void)argc;
+    (void)aOutputMaxLen;
 }
 
 void otPlatDiagModeSet(bool aMode)

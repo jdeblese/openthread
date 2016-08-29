@@ -39,8 +39,6 @@ static volatile uint32_t *lreg;
 
 void PlatformInit(int argc, char *argv[])
 {
-    uint8_t msg[] = "UART Enabled\r\n";
-
     amba_init();
 
     lreg = (uint32_t *)amba_find_apbslv_addr(VENDOR_GAISLER, GAISLER_IRQMP, 0);
@@ -49,8 +47,6 @@ void PlatformInit(int argc, char *argv[])
     leon3RadioInit();
     leon3RandomInit();
     otPlatUartEnable();
-
-    otPlatUartSend(msg, 14);
 
     (void)argc;
     (void)argv;
