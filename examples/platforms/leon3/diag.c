@@ -32,6 +32,7 @@
 #include <sys/time.h>
 
 #include <platform/alarm.h>
+#include <platform/radio.h>
 #include "platform-leon3.h"
 
 /**
@@ -48,6 +49,10 @@ void otPlatDiagProcess(int argc, char *argv[], char *aOutput, size_t aOutputMaxL
     {
         uint32_t t = otPlatAlarmGetNow();
         sprintf(aOutput, "alarm time is %lu (%lu.%03lu seconds)\r\n", t, t / kTicksPerSec, t%kTicksPerSec);
+    }
+    else if (strcmp(argv[0], "rssi") == 0)
+    {
+        sprintf(aOutput, "rssi is %d dBm\r\n", otPlatRadioGetRssi());
     }
     else
     {
