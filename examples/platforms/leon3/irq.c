@@ -22,5 +22,9 @@ void leon3IntInit(void)
     // Enable UART IRQs
     catch_interrupt((int)&UARTIntHandler, kUARTIRQ);
     *s_mask_reg |= (1 << kUARTIRQ);
+
+    // Enable MRF interrupts
+    catch_interrupt((int)&mrfIntHandler, kMRFIRQ);
+    *s_mask_reg |= (1 << kMRFIRQ);
 }
 

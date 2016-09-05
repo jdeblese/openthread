@@ -40,7 +40,7 @@ libopenthread_leon3_a_SOURCES             = \
     misc.c                                  \
     logging.c                               \
     platform.c                              \
-    radio-stub.c                            \
+    radio-mrf.c                             \
     random.c                                \
     uart.c                                  \
     diag.c                                  \

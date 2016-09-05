@@ -28,12 +28,16 @@
 
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
 
 #include <platform/alarm.h>
 #include <platform/radio.h>
 #include "platform-leon3.h"
+
+#include "mrf.h"
+#include "spi.h"
 
 /**
  * diagnostics mode flag.
@@ -53,6 +57,31 @@ void otPlatDiagProcess(int argc, char *argv[], char *aOutput, size_t aOutputMaxL
     else if (strcmp(argv[0], "rssi") == 0)
     {
         sprintf(aOutput, "rssi is %d dBm\r\n", otPlatRadioGetRssi());
+    }
+    else if (strcmp(argv[0], "mrf") == 0)
+    {
+        sprintf(aOutput, "diag MRF access\r\n");
+        if (argc > 1 && strcmp(argv[1], "mem") == 0)
+        {
+            if (argc > 2 && argv[2][0] == '0' && argv[2][1] == 'x')
+            {
+                uint32_t addr = strtol(argv[2], NULL, 16);
+                uint8_t ret;
+
+                if (addr & 0xF00)
+                {
+                    leon3SpiSetWidth(12);
+                    ret = transaction(longRd(addr));
+                }
+                else
+                {
+                    leon3SpiSetWidth(8);
+                    ret = transaction(shortRd(addr));
+                }
+
+                sprintf(aOutput, "0x%03lx : 0x%02hhx\r\n", addr, ret);
+            }
+        }
     }
     else
     {
