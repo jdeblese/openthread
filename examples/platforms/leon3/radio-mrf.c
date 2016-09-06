@@ -74,6 +74,11 @@ uint8_t transaction(uint32_t addr, uint32_t data) {
     return buf[1]>>16;
 }
 
+PhyState getRadioState(void)
+{
+    return sState;
+}
+
 void enableReceiver(void)
 {
     sIsReceiverEnabled = true;

@@ -45,8 +45,9 @@ enum
     kSystemClock = 50000000,  ///< MHz
     kBaudRate = 115200,
     kReceiveBufferSize = 128,
-    kUARTIRQ = 2,
     kTicksPerSec = 1000,      ///< Alarm ticks per second
+    kUARTIRQ = 2,
+    kMRFIRQ = 13,
 };
 
 extern void amba_init(void);

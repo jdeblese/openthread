@@ -58,6 +58,30 @@ void otPlatDiagProcess(int argc, char *argv[], char *aOutput, size_t aOutputMaxL
     {
         sprintf(aOutput, "rssi is %d dBm\r\n", otPlatRadioGetRssi());
     }
+    else if (strcmp(argv[0], "radio") == 0)
+    {
+        if (argc == 1)
+        {
+            switch (getRadioState())
+            {
+                case kStateDisabled :
+                    sprintf(aOutput, "radio is disabled\r\n");
+                    break;
+                case kStateTransmit :
+                    sprintf(aOutput, "radio is in transmit mode\r\n");
+                    break;
+                case kStateReceive :
+                    sprintf(aOutput, "radio is in transmit mode\r\n");
+                    break;
+                case kStateSleep :
+                    sprintf(aOutput, "radio is sleeping\r\n");
+                    break;
+                default :
+                    sprintf(aOutput, "radio is in an unknown state\r\n");
+                    break;
+            }
+        }
+    }
     else if (strcmp(argv[0], "mrf") == 0)
     {
         sprintf(aOutput, "diag MRF access\r\n");

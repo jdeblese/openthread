@@ -7,5 +7,6 @@
 #define longRd(addr)       (0x800 | (((addr) & 0x3FF)<<1))    <<20, 0x00
 
 uint8_t transaction(uint32_t addr, uint32_t data);
+PhyState getRadioState(void);
 
 #endif
