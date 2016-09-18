@@ -8,5 +8,6 @@
 
 uint8_t transaction(uint32_t addr, uint32_t data);
 PhyState getRadioState(void);
+PhyState getAckWait(void);
 
 #endif

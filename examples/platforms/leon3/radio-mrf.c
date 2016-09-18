@@ -42,20 +42,50 @@
 
 enum
 {
-    IEEE802154_MIN_LENGTH = 5,
-    IEEE802154_MAX_LENGTH = 127,
-    IEEE802154_ACK_LENGTH = 5,
-    IEEE802154_FRAME_TYPE_MASK = 0x7,
-    IEEE802154_FRAME_TYPE_ACK = 0x2,
-    IEEE802154_FRAME_PENDING = 1 << 4,
-    IEEE802154_ACK_REQUEST = 1 << 5,
-    IEEE802154_DSN_OFFSET = 2,
+    IEEE802154_MIN_LENGTH         = 5,
+    IEEE802154_MAX_LENGTH         = 127,
+    IEEE802154_ACK_LENGTH         = 5,
+
+    IEEE802154_BROADCAST          = 0xffff,
+
+    IEEE802154_FRAME_TYPE_ACK     = 2 << 0,
+    IEEE802154_FRAME_TYPE_MACCMD  = 3 << 0,
+    IEEE802154_FRAME_TYPE_MASK    = 7 << 0,
+
+    IEEE802154_SECURITY_ENABLED   = 1 << 3,
+    IEEE802154_FRAME_PENDING      = 1 << 4,
+    IEEE802154_ACK_REQUEST        = 1 << 5,
+    IEEE802154_PANID_COMPRESSION  = 1 << 6,
+
+    IEEE802154_DST_ADDR_NONE      = 0 << 2,
+    IEEE802154_DST_ADDR_SHORT     = 2 << 2,
+    IEEE802154_DST_ADDR_EXT       = 3 << 2,
+    IEEE802154_DST_ADDR_MASK      = 3 << 2,
+
+    IEEE802154_SRC_ADDR_NONE      = 0 << 6,
+    IEEE802154_SRC_ADDR_SHORT     = 2 << 6,
+    IEEE802154_SRC_ADDR_EXT       = 3 << 6,
+    IEEE802154_SRC_ADDR_MASK      = 3 << 6,
+
+    IEEE802154_DSN_OFFSET         = 2,
+    IEEE802154_DSTPAN_OFFSET      = 3,
+    IEEE802154_DSTADDR_OFFSET     = 5,
+
+    IEEE802154_SEC_LEVEL_MASK     = 7 << 0,
+
+    IEEE802154_KEY_ID_MODE_0      = 0 << 3,
+    IEEE802154_KEY_ID_MODE_1      = 1 << 3,
+    IEEE802154_KEY_ID_MODE_2      = 2 << 3,
+    IEEE802154_KEY_ID_MODE_3      = 3 << 3,
+    IEEE802154_KEY_ID_MODE_MASK   = 3 << 3,
+
+    IEEE802154_MACCMD_DATA_REQ    = 4,
 };
 
 static RadioPacket sTransmitFrame;
 static RadioPacket sReceiveFrame;
 static ThreadError sTransmitError;
-static ThreadError sReceiveError;
+//static ThreadError sReceiveError;
 static uint8_t sTransmitting;
 
 static uint8_t sTransmitPsdu[IEEE802154_MAX_LENGTH];
@@ -63,8 +93,161 @@ static uint8_t sReceivePsdu[IEEE802154_MAX_LENGTH];
 
 static PhyState sState = kStateDisabled;
 static bool sIsReceiverEnabled = false;
+static bool sAckWait = false;
 
 static uint8_t sLastRss = 0;
+
+// *****************************************************************************
+//                     Frame manipulation routines
+// *****************************************************************************
+
+static inline bool isFrameTypeAck(const uint8_t *frame)
+{
+    return (frame[0] & IEEE802154_FRAME_TYPE_MASK) == IEEE802154_FRAME_TYPE_ACK;
+}
+
+static inline bool isFrameTypeMacCmd(const uint8_t *frame)
+{
+    return (frame[0] & IEEE802154_FRAME_TYPE_MASK) == IEEE802154_FRAME_TYPE_MACCMD;
+}
+
+static inline bool isSecurityEnabled(const uint8_t *frame)
+{
+    return (frame[0] & IEEE802154_SECURITY_ENABLED) != 0;
+}
+
+static inline bool isFramePending(const uint8_t *frame)
+{
+    return (frame[0] & IEEE802154_FRAME_PENDING) != 0;
+}
+
+static inline bool isAckRequested(const uint8_t *frame)
+{
+    return (frame[0] & IEEE802154_ACK_REQUEST) != 0;
+}
+
+static inline bool isPanIdCompressed(const uint8_t *frame)
+{
+    return (frame[0] & IEEE802154_PANID_COMPRESSION) != 0;
+}
+
+static inline bool isDataRequest(const uint8_t *frame)
+{
+    const uint8_t *cur = frame;
+    uint8_t securityControl;
+    bool rval;
+
+    // FCF + DSN
+    cur += 2 + 1;
+
+    VerifyOrExit(isFrameTypeMacCmd(frame), rval = false);
+
+    // Destination PAN + Address
+    switch (frame[1] & IEEE802154_DST_ADDR_MASK)
+    {
+    case IEEE802154_DST_ADDR_SHORT:
+        cur += sizeof(otPanId) + sizeof(otShortAddress);
+        break;
+
+    case IEEE802154_DST_ADDR_EXT:
+        cur += sizeof(otPanId) + sizeof(otExtAddress);
+        break;
+
+    default:
+        ExitNow(rval = false);
+    }
+
+    // Source PAN + Address
+    switch (frame[1] & IEEE802154_SRC_ADDR_MASK)
+    {
+    case IEEE802154_SRC_ADDR_SHORT:
+        if (!isPanIdCompressed(frame))
+        {
+            cur += sizeof(otPanId);
+        }
+
+        cur += sizeof(otShortAddress);
+        break;
+
+    case IEEE802154_SRC_ADDR_EXT:
+        if (!isPanIdCompressed(frame))
+        {
+            cur += sizeof(otPanId);
+        }
+
+        cur += sizeof(otExtAddress);
+        break;
+
+    default:
+        ExitNow(rval = false);
+    }
+
+    // Security Control + Frame Counter + Key Identifier
+    if (isSecurityEnabled(frame))
+    {
+        securityControl = *cur;
+
+        if (securityControl & IEEE802154_SEC_LEVEL_MASK)
+        {
+            cur += 1 + 4;
+        }
+
+        switch (securityControl & IEEE802154_KEY_ID_MODE_MASK)
+        {
+        case IEEE802154_KEY_ID_MODE_0:
+            cur += 0;
+            break;
+
+        case IEEE802154_KEY_ID_MODE_1:
+            cur += 1;
+            break;
+
+        case IEEE802154_KEY_ID_MODE_2:
+            cur += 5;
+            break;
+
+        case IEEE802154_KEY_ID_MODE_3:
+            cur += 9;
+            break;
+        }
+    }
+
+    // Command ID
+    rval = cur[0] == IEEE802154_MACCMD_DATA_REQ;
+
+exit:
+    return rval;
+}
+
+static inline uint8_t getDsn(const uint8_t *frame)
+{
+    return frame[IEEE802154_DSN_OFFSET];
+}
+
+static inline otPanId getDstPan(const uint8_t *frame)
+{
+    return (otPanId)((frame[IEEE802154_DSTPAN_OFFSET + 1] << 8) | frame[IEEE802154_DSTPAN_OFFSET]);
+}
+
+static inline otShortAddress getShortAddress(const uint8_t *frame)
+{
+    return (otShortAddress)((frame[IEEE802154_DSTADDR_OFFSET + 1] << 8) | frame[IEEE802154_DSTADDR_OFFSET]);
+}
+
+static inline void getExtAddress(const uint8_t *frame, otExtAddress *address)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(otExtAddress); i++)
+    {
+        address->m8[i] = frame[IEEE802154_DSTADDR_OFFSET + (sizeof(otExtAddress) - 1 - i)];
+    }
+}
+
+// *****************************************************************************
+//                     Low-level MRF communication
+// *****************************************************************************
+
 
 uint8_t transaction(uint32_t addr, uint32_t data) {
     uint32_t buf[2];
@@ -74,10 +257,18 @@ uint8_t transaction(uint32_t addr, uint32_t data) {
     return buf[1]>>16;
 }
 
+// Radio utility functions
+
 PhyState getRadioState(void)
 {
     return sState;
 }
+
+PhyState getAckWait(void)
+{
+    return sAckWait;
+}
+
 
 void enableReceiver(void)
 {
@@ -208,7 +399,7 @@ void leon3RadioInit(void)
     transaction(shortWr(0x36,0x00));
 
     // Delay > 192 us
-    
+
     sTransmitting = 0;
 
     leon3SpiSetWidth(12);
@@ -282,48 +473,10 @@ ThreadError otPlatRadioTransmit(void)
 {
     ThreadError error = kThreadError_Busy;
 
-    if (sState == kStateReceive)
+    if ((sState == kStateTransmit && !sAckWait && !sTransmitting) || sState == kStateReceive)
     {
-        int i;
-
         error = kThreadError_None;
         sState = kStateTransmit;
-        sTransmitError = kThreadError_None;
-
-        s_gpio[1] |= 0x1;
-
-        //while (HWREG(RFCORE_XREG_FSMSTAT1) & RFCORE_XREG_FSMSTAT1_TX_ACTIVE);
-
-        // flush txfifo
-
-        // Write packet to normal TX FIFO
-
-        // frame length
-        leon3SpiSetWidth(12);
-        transaction(longWr(0x000, sTransmitFrame.mLength));
-
-        // set frame data
-        for (i = 0; i < sTransmitFrame.mLength; i++)
-        {
-            transaction(longWr(0x001 + i, sTransmitFrame.mPsdu[i]));
-        }
-
-        setChannel(sTransmitFrame.mChannel);
-        //while ((HWREG(RFCORE_XREG_FSMSTAT1) & 1) == 0);
-
-        // wait for valid rssi
-
-        //VerifyOrExit(HWREG(RFCORE_XREG_FSMSTAT1) & (RFCORE_XREG_FSMSTAT1_CCA | RFCORE_XREG_FSMSTAT1_SFD),
-                     //sTransmitError = kThreadError_ChannelAccessFailure);
-
-        // begin transmit
-        leon3SpiSetWidth(8);
-        transaction(shortWr(0x1B, 0x01));
-
-        //while (HWREG(RFCORE_XREG_FSMSTAT1) & RFCORE_XREG_FSMSTAT1_TX_ACTIVE);
-
-        sTransmitting = 1;
-
     }
 
     return error;
@@ -331,18 +484,6 @@ ThreadError otPlatRadioTransmit(void)
 
 int8_t otPlatRadioGetRssi(void)
 {
-    /*
-    uint8_t raw;
-
-    leon3SpiSetWidth(8);
-    transaction(shortWr(0x3e,0x80));  // RSSI on request
-    while ((transaction(shortRd(0x3e)) & 0x01) == 0);
-
-    leon3SpiSetWidth(12);
-    raw = transaction(longRd(0x210));
-
-    return ((int8_t)(raw / 5)) - 90;
-    */
     return ((int8_t)(sLastRss / 5)) - 90;
 }
 
@@ -361,59 +502,258 @@ void otPlatRadioSetPromiscuous(bool aEnable)
     (void)aEnable;
 }
 
+// *****************************************************************************
+//                       MRF Configuration
+// *****************************************************************************
+
+// *****************************************************************************
+//                     Radio Functionality
+// *****************************************************************************
+
+void radioProcessFrame(void)
+{
+    ThreadError error = kThreadError_None;
+    /* Don't bother verifying frame, MRF should have already
+    otPanId dstpan;
+    otShortAddress short_address;
+    otExtAddress ext_address;
+
+    VerifyOrExit(sPromiscuous == false, error = kThreadError_None);
+
+    switch (sReceiveFrame.mPsdu[1] & IEEE802154_DST_ADDR_MASK)
+    {
+    case IEEE802154_DST_ADDR_NONE:
+        break;
+
+    case IEEE802154_DST_ADDR_SHORT:
+        dstpan = getDstPan(sReceiveFrame.mPsdu);
+        short_address = getShortAddress(sReceiveFrame.mPsdu);
+        VerifyOrExit((dstpan == IEEE802154_BROADCAST || dstpan == sPanid) &&
+                     (short_address == IEEE802154_BROADCAST || short_address == sShortAddress),
+                     error = kThreadError_Abort);
+        break;
+
+    case IEEE802154_DST_ADDR_EXT:
+        dstpan = getDstPan(sReceiveFrame.mPsdu);
+        getExtAddress(sReceiveFrame.mPsdu, &ext_address);
+        VerifyOrExit((dstpan == IEEE802154_BROADCAST || dstpan == sPanid) &&
+                     memcmp(&ext_address, sExtendedAddress, sizeof(ext_address)) == 0,
+                     error = kThreadError_Abort);
+        break;
+
+    default:
+        ExitNow(error = kThreadError_Abort);
+    }
+    */
+
+    // FIXME set power value correctly
+    sReceiveFrame.mPower = -20;
+
+    // generate acknowledgment
+    // Done automatically by MRF
+
+//exit:
+
+#if OPENTHREAD_ENABLE_DIAG
+
+    if (otPlatDiagModeGet())
+    {
+        otPlatDiagRadioReceiveDone(error == kThreadError_None ? &sReceiveFrame : NULL, error);
+    }
+    else
+#endif
+    {
+        otPlatRadioReceiveDone(error == kThreadError_None ? &sReceiveFrame : NULL, error);
+    }
+}
+
+void radioReceive(void)
+{
+    if (!sTransmitting && (sState != kStateTransmit || sAckWait))
+    {
+        uint8_t length, i;
+
+        s_gpio[1] |= 0x4;
+
+        leon3SpiSetWidth(8);
+        transaction(shortWr(0x39,0x04));  // Disable read?
+
+        // Read in frame from MRF Rx FIFO
+
+        // read length
+        leon3SpiSetWidth(12);
+        length = transaction(longRd(0x300));
+        //VerifyOrExit(IEEE802154_MIN_LENGTH <= length && length <= IEEE802154_MAX_LENGTH, ;);
+
+        // read psdu
+        for (i = 0; i < length - 2; i++)
+        {
+            sReceiveFrame.mPsdu[i] = transaction(longRd(0x301 + i));
+        }
+
+        // Set LQI, RSS, length
+        sReceiveFrame.mLqi    = transaction(longRd(0x301 + length));
+        sLastRss              = transaction(longRd(0x301 + length + 1));
+        sReceiveFrame.mLength = length;
+
+        leon3SpiSetWidth(8);
+        transaction(shortWr(0x39,0x00));  // Enable read?
+
+        if (sAckWait &&
+            sTransmitFrame.mChannel == sReceiveFrame.mChannel &&
+            isFrameTypeAck(sReceiveFrame.mPsdu))
+        {
+            uint8_t tx_sequence = getDsn(sTransmitFrame.mPsdu);
+            uint8_t rx_sequence = getDsn(sReceiveFrame.mPsdu);
+
+            if (tx_sequence == rx_sequence)
+            {
+                sState = kStateReceive;
+                sAckWait = false;
+
+#if OPENTHREAD_ENABLE_DIAG
+
+                if (otPlatDiagModeGet())
+                {
+                    otPlatDiagRadioTransmitDone(isFramePending(sReceiveFrame.mPsdu), kThreadError_None);
+                }
+                else
+#endif
+                {
+                    otPlatRadioTransmitDone(isFramePending(sReceiveFrame.mPsdu), kThreadError_None);
+                }
+            }
+        }
+        else if (sState == kStateReceive)
+        {
+            radioProcessFrame();
+        }
+
+        s_gpio[1] &= ~0x4;
+
+    }
+}
+
+void radioStartTransmit(void)
+{
+    uint8_t i;
+
+    s_gpio[1] |= 0x1;
+
+    //while (HWREG(RFCORE_XREG_FSMSTAT1) & RFCORE_XREG_FSMSTAT1_TX_ACTIVE);
+
+    // flush txfifo
+
+    // Write packet to normal TX FIFO
+
+    leon3SpiSetWidth(12);
+
+    // length of MHR
+    // FIXME this needs to be completed: properly determine header length
+    if (sTransmitFrame.mPsdu[0] & 0xC0)
+    {
+        transaction(longWr(0x000, 15));
+    }
+    else
+    {
+        transaction(longWr(0x000, 7));
+    }
+
+    // length of MHR + MSDU
+    transaction(longWr(0x001, sTransmitFrame.mLength));
+
+    // MHR + MSDU, without frame check
+    for (i = 0; i < sTransmitFrame.mLength; i++)
+    {
+        transaction(longWr(0x002 + i, sTransmitFrame.mPsdu[i]));
+    }
+
+    setChannel(sTransmitFrame.mChannel);
+    //while ((HWREG(RFCORE_XREG_FSMSTAT1) & 1) == 0);
+
+    // wait for valid rssi
+
+    //VerifyOrExit(HWREG(RFCORE_XREG_FSMSTAT1) & (RFCORE_XREG_FSMSTAT1_CCA | RFCORE_XREG_FSMSTAT1_SFD),
+                 //sTransmitError = kThreadError_ChannelAccessFailure);
+
+    // begin transmit
+    leon3SpiSetWidth(8);
+    transaction(shortWr(0x1B, 0x01));
+
+    //while (HWREG(RFCORE_XREG_FSMSTAT1) & RFCORE_XREG_FSMSTAT1_TX_ACTIVE);
+
+    sTransmitting = 1;
+    sAckWait = isAckRequested(sTransmitFrame.mPsdu);
+
+    leon3SpiSetWidth(12);
+    i = transaction(longRd(0x20F))>>2;
+    s_gpio[1] &= ~0x38;
+    s_gpio[1] |= i & 0x38;
+}
+
+void radioCompleteTransmit(void)
+{
+    uint8_t txnstat;
+
+    if (sTransmitting)
+    {
+        s_gpio[1] &= ~0x01;
+
+        txnstat = transaction(shortRd(0x24)) & 0x1;
+
+        sTransmitting = 0;
+        sTransmitError = txnstat != 0 ? kThreadError_ChannelAccessFailure : kThreadError_None;  // TXNSTAT bit
+
+        if (txnstat)
+            s_gpio[1] |= 0x2;  // Led on for transmission error
+        else
+            s_gpio[1] &= ~0x2;
+
+        if (!sAckWait)
+        {
+            sState = kStateReceive;
+
+#if OPENTHREAD_ENABLE_DIAG
+
+            if (otPlatDiagModeGet())
+            {
+                otPlatDiagRadioTransmitDone(false, kThreadError_None);
+            }
+            else
+#endif
+            {
+                otPlatRadioTransmitDone(false, kThreadError_None);
+            }
+        }
+    }
+}
+
 void leon3RadioProcess(void)
 {
-    if ((sState == kStateReceive) && (sReceiveFrame.mLength > 0))
+    /*
+    if (sTransmitting)
+        s_gpio[1] &= ~0x10;
+    else
+        s_gpio[1] |= 0x10;  // Led on for transmitting
+
+    if (sState == kStateReceive)
+        s_gpio[1] &= ~0x8;
+    else if (sState == kStateTransmit)
+        s_gpio[1] |= 0x8;  // Led on for state transmit
+        */
+
+    if (sState == kStateTransmit && !sAckWait && !sTransmitting)
     {
-        s_gpio[1] &= ~0x4;
-#if OPENTHREAD_ENABLE_DIAG
-        if (otPlatDiagModeGet())
-        {
-            otPlatDiagRadioReceiveDone(&sReceiveFrame, sReceiveError);
-        }
-        else
-#endif
-        {
-            otPlatRadioReceiveDone(&sReceiveFrame, sReceiveError);
-        }
+        radioStartTransmit();
     }
 
-    if (sState == kStateTransmit && !sTransmitting)
-    {
-        if (sTransmitError != kThreadError_None || (sTransmitFrame.mPsdu[0] & IEEE802154_ACK_REQUEST) == 0)
-        {
-            sState = kStateReceive;
-#if OPENTHREAD_ENABLE_DIAG
-            if (otPlatDiagModeGet())
-            {
-                otPlatDiagRadioTransmitDone(false, sTransmitError);
-            }
-            else
-#endif
-            {
-                otPlatRadioTransmitDone(false, sTransmitError);
-            }
-        }
-        else if (sReceiveFrame.mLength == IEEE802154_ACK_LENGTH &&
-                 (sReceiveFrame.mPsdu[0] & IEEE802154_FRAME_TYPE_MASK) == IEEE802154_FRAME_TYPE_ACK &&
-                 (sReceiveFrame.mPsdu[IEEE802154_DSN_OFFSET] == sTransmitFrame.mPsdu[IEEE802154_DSN_OFFSET]))
-        {
-            sState = kStateReceive;
-#if OPENTHREAD_ENABLE_DIAG
-
-            if (otPlatDiagModeGet())
-            {
-                otPlatDiagRadioTransmitDone((sReceiveFrame.mPsdu[0] & IEEE802154_FRAME_PENDING) != 0, sTransmitError);
-            }
-            else
-#endif
-            {
-                otPlatRadioTransmitDone((sReceiveFrame.mPsdu[0] & IEEE802154_FRAME_PENDING) != 0, sTransmitError);
-            }
-        }
-    }
-
-    sReceiveFrame.mLength = 0;
+    /*
+    uint8_t i;
+    leon3SpiSetWidth(12);
+    i = transaction(longRd(0x20F))>>2;
+    s_gpio[1] &= ~0x38;
+    s_gpio[1] |= i & 0x38;
+    */
 }
 
 void mrfIntHandler(int irq)
@@ -423,49 +763,25 @@ void mrfIntHandler(int irq)
     leon3SpiSetWidth(8);
     intstat = transaction(shortRd(0x31));
 
-    if (intstat & 0x08)  // RXIF
-    {
-        uint8_t length, i;
-
-        VerifyOrExit(sState == kStateReceive || sState == kStateTransmit, ;);
-
-        s_gpio[1] |= 0x4;
-
-        transaction(shortWr(0x39,0x04));  // Disable read?
-
-        // Read length
-        leon3SpiSetWidth(12);
-        length = transaction(longRd(0x300));
-        VerifyOrExit(IEEE802154_MIN_LENGTH <= length && length <= IEEE802154_MAX_LENGTH, ;);
-
-        // read psdu
-        for (i = 0; i < length - 2; i++)
-        {
-            sReceiveFrame.mPsdu[i] = transaction(longRd(0x301 + i));
-        }
-
-        sReceiveFrame.mLqi    = transaction(longRd(0x301 + length));
-        sLastRss              = transaction(longRd(0x301 + length + 1));
-        sReceiveFrame.mLength = length;
-
-        leon3SpiSetWidth(8);
-        transaction(shortWr(0x39,0x00));  // Enable read?
-
-    }
+    // Process transmit interrupt first
     if (intstat & 0x01)  // TXIF
     {
-        uint8_t txnstat = transaction(shortRd(0x24)) & 0x1;
-        sTransmitting = 0;
-        sTransmitError = txnstat ? kThreadError_ChannelAccessFailure : kThreadError_None;  // TXNSTAT bit
-        s_gpio[1] &= ~0x01;
-        if (txnstat)
-            s_gpio[1] |= 0x2;
-        else
-            s_gpio[1] &= ~0x2;
+        radioCompleteTransmit();
+    }
+
+    // Check if there's also a receive interrupt
+    if (intstat & 0x08)  // RXIF
+    {
+        radioReceive();
     }
 
     (void)irq;
 
-exit:
+    uint8_t i;
+    leon3SpiSetWidth(12);
+    i = transaction(longRd(0x20F))>>2;
+    s_gpio[1] &= ~0x38;
+    s_gpio[1] |= i & 0x38;
+//exit:
     return;
 }
